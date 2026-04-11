@@ -49,4 +49,4 @@ Because Music Assistant often hides newly discovered custom web players by defau
 ## ☕ Support the Project
 If this app made your home theater experience better, consider buying me a coffee! 
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/TVOJ_USERNAME)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/TVOJ_USERNAME)
