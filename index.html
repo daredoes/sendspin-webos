@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
+    <title>Sendspin Cinema TV</title>
+    <script src="Vibrant.min.js"></script>
+    <style>
+        :root { --accent: #0084ff; --glass: rgba(255, 255, 255, 0.1); }
+        body { background: #000; color: #fff; font-family: 'Inter', sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; overflow: hidden; cursor: none; }
+        
+        #bg-overlay { position: fixed; inset: -10%; background-size: cover; background-position: center; filter: blur(90px) brightness(0.2) saturate(1.2); z-index: -2; transition: background-image 1.5s ease; }
+        #bg-vignette { position: fixed; inset: 0; background: radial-gradient(circle at center, transparent 0%, rgba(0,0,0,1) 120%); z-index: -1; }
+
+        #settings-trigger {
+            position: fixed; top: -100px; right: 40px; z-index: 4000;
+            width: 80px; height: 80px; cursor: pointer; transition: top 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            background: var(--glass); display: flex; justify-content: center; align-items: center;
+            border-radius: 0 0 25px 25px; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(15px);
+        }
+        #settings-trigger svg { width: 40px; height: 40px; fill: #fff; opacity: 0.7; }
+
+        .cover-wrapper { width: 48vh; height: 48vh; margin-bottom: 25px; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 100px #000; border: 1px solid rgba(255,255,255,0.1); transition: all 0.6s ease; }
+        .info { text-align: center; max-width: 85vw; z-index: 5; transition: all 0.6s ease; display: flex; flex-direction: column; align-items: center; }
+        
+        .progress-wrapper { width: 68vw; display: flex; align-items: center; gap: 20px; margin-bottom: 30px; opacity: 0; transform: translateY(15px); transition: all 0.5s ease; }
+        .time-label { font-family: monospace; font-size: 1.3rem; color: rgba(255,255,255,0.4); min-width: 70px; }
+        .progress-container { flex-grow: 1; height: 10px; background: rgba(255,255,255,0.1); border-radius: 10px; position: relative; }
+        #progress-bar { position: absolute; left: 0; top: 0; height: 100%; background: var(--accent); width: 0%; border-radius: 10px; box-shadow: 0 0 25px var(--accent); transition: background 1s ease; }
+
+        h1 { font-size: 4.5rem; margin: 0; font-weight: 800; letter-spacing: -2px; line-height: 1; transition: 0.5s; }
+        h2 { color: rgba(255,255,255,0.5); font-size: 2.5rem; margin: 15px 0 0; font-weight: 300; transition: 0.5s; }
+
+        #controls-container { position: fixed; bottom: -200px; left: 0; width: 100%; height: 200px; display: flex; justify-content: center; align-items: center; background: linear-gradient(to top, #000, transparent); transition: bottom 0.5s ease; z-index: 100; }
+        .btn { background: var(--glass); border: 1px solid rgba(255,255,255,0.1); color: #fff; width: 85px; height: 85px; border-radius: 50%; margin: 0 20px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; font-size: 2rem; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); }
+        .btn:hover { background: var(--accent); transform: scale(1.1); }
+
+        body.show-ui { cursor: default; }
+        body.show-ui #controls-container { bottom: 0; }
+        body.show-ui #settings-trigger { top: 0; }
+        body.show-ui .progress-wrapper { opacity: 1; transform: translateY(0); }
+        body.show-ui h1, body.show-ui h2 { opacity: 0.15; filter: blur(5px); }
+        body.show-ui .cover-wrapper { transform: translateY(-70px) scale(0.85); }
+
+        /* Setup Ekran sa oba polja */
+        #setup-screen { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 5000; display: none; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(30px); }
+        .input-group { width: 100%; display: flex; flex-direction: column; align-items: center; margin-bottom: 25px; }
+        input { background: none; border: none; border-bottom: 2px solid var(--accent); color: #fff; font-size: 3rem; text-align: center; width: 60%; padding: 15px; outline: none; font-family: monospace; }
+        input::placeholder { color: rgba(255,255,255,0.1); }
+        .setup-hint { margin-top: 30px; color: #555; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 2px; }
+    </style>
+</head>
+<body id="main-body">
+
+    <div id="settings-trigger" onclick="openSettings()">
+        <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.81,11.69,4.81,12c0,0.31,0.02,0.65,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+    </div>
+
+    <div id="setup-screen">
+        <div class="input-group">
+            <input type="text" id="server-ip" placeholder="192.168.1.20" onkeydown="if(event.key==='Enter') document.getElementById('player-name').focus()">
+        </div>
+        <div class="input-group">
+            <input type="text" id="player-name" placeholder="Player Name" onkeydown="if(event.key==='Enter') saveConfig()">
+        </div>
+        <div class="setup-hint">Unesi podatke i pritisni Enter na drugom polju</div>
+    </div>
+
+    <div id="bg-overlay"></div>
+    <div id="bg-vignette"></div>
+
+    <div class="cover-wrapper">
+        <div id="loader" style="font-size: 5rem; display: flex; justify-content: center; align-items: center; height: 100%;">💿</div>
+        <img id="cover-art" style="width:100%; height:100%; object-fit:cover; display:none;" crossorigin="anonymous">
+    </div>
+
+    <div class="info">
+        <div class="progress-wrapper">
+            <span class="time-label" id="time-current">0:00</span>
+            <div class="progress-container"><div id="progress-bar"></div></div>
+            <span class="time-label" id="time-total">0:00</span>
+        </div>
+        <h1 id="title">Učitavanje...</h1>
+        <h2 id="artist">Cinema Player</h2>
+    </div>
+
+    <div id="controls-container">
+        <button class="btn" id="prev-btn">⏮</button>
+        <button class="btn btn-play" id="play-btn" style="width:110px; height:110px; font-size:3rem;">▶</button>
+        <button class="btn" id="next-btn">⏭</button>
+    </div>
+
+    <script type="module">
+        import { SendspinPlayer } from './sendspin-lib.js';
+
+        const titleEl = document.getElementById('title');
+        const artistEl = document.getElementById('artist');
+        const coverEl = document.getElementById('cover-art');
+        const bgEl = document.getElementById('bg-overlay');
+        const progressBar = document.getElementById('progress-bar');
+        const timeCurrent = document.getElementById('time-current');
+        const timeTotal = document.getElementById('time-total');
+        
+        let uiTimeout, isPlaying = false, duration = 0, currentPos = 0;
+
+        function formatTime(ms) {
+            const s = Math.floor(ms / 1000);
+            return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+        }
+
+        function updateTheme(url) {
+            if (!url) return;
+            const img = new Image();
+            img.crossOrigin = "Anonymous";
+            img.src = url;
+            img.onload = () => {
+                try {
+                    const v = new Vibrant(img);
+                    const sw = v.swatches();
+                    const color = sw['Vibrant'] || sw['LightVibrant'] || sw['Muted'];
+                    if (color) document.documentElement.style.setProperty('--accent', color.getHex());
+                } catch(e) { console.warn("Boja nije učitana:", e); }
+            };
+        }
+
+        window.openSettings = () => {
+            document.getElementById('setup-screen').style.display = 'flex';
+            document.getElementById('server-ip').value = localStorage.getItem('ma_server_ip') || '';
+            document.getElementById('player-name').value = localStorage.getItem('ma_player_name') || '';
+            document.getElementById('server-ip').focus();
+        };
+
+        window.saveConfig = () => {
+            const ip = document.getElementById('server-ip').value.trim();
+            const name = document.getElementById('player-name').value.trim() || 'LG Cinema TV';
+            if (ip) { 
+                localStorage.setItem('ma_server_ip', ip); 
+                localStorage.setItem('ma_player_name', name);
+                location.reload(); 
+            }
+        };
+
+        async function init() {
+            const savedIp = localStorage.getItem('ma_server_ip');
+            const savedName = localStorage.getItem('ma_player_name');
+            
+            if (!savedIp) { window.openSettings(); return; }
+
+            // Generiše bezbedan ID za server (npr. Dnevna Soba -> webos-dnevna-soba)
+            const safePlayerId = 'webos-' + (savedName || 'lg-cinema').toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+            window.playerInstance = new SendspinPlayer({
+                playerId: safePlayerId,
+                baseUrl: `http://${savedIp}:8927`,
+                clientName: savedName || 'LG Cinema TV',
+                onStateChange: (state) => {
+                    if (state.serverState?.metadata) {
+                        const m = state.serverState.metadata;
+                        titleEl.innerText = m.title || "Spreman";
+                        artistEl.innerText = m.artist || "Music Assistant";
+                        const art = m.artwork_url || m.art || m.image;
+                        if (art && coverEl.src !== art) {
+                            coverEl.src = art; bgEl.style.backgroundImage = `url('${art}')`;
+                            coverEl.style.display = 'block'; document.getElementById('loader').style.display = 'none';
+                            updateTheme(art);
+                        }
+                        if (m.progress) {
+                            duration = m.progress.track_duration;
+                            currentPos = m.progress.track_progress;
+                            timeTotal.innerText = formatTime(duration);
+                            progressBar.style.width = (currentPos / duration * 100) + '%';
+                            timeCurrent.innerText = formatTime(currentPos);
+                        }
+                    }
+                    if (state.groupState) {
+                        isPlaying = state.groupState.playback_state === 'playing';
+                        document.getElementById('play-btn').innerText = isPlaying ? '⏸' : '▶';
+                    }
+                }
+            });
+            await window.playerInstance.connect();
+        }
+
+        function showUI() {
+            document.getElementById('main-body').classList.add('show-ui');
+            clearTimeout(uiTimeout);
+            uiTimeout = setTimeout(() => document.getElementById('main-body').classList.remove('show-ui'), 5000);
+        }
+
+        window.addEventListener('mousemove', showUI);
+        window.addEventListener('keydown', showUI);
+        document.getElementById('play-btn').onclick = () => window.playerInstance?.sendCommand(isPlaying ? 'pause' : 'play');
+        document.getElementById('prev-btn').onclick = () => window.playerInstance?.sendCommand('previous');
+        document.getElementById('next-btn').onclick = () => window.playerInstance?.sendCommand('next');
+
+        init();
+    </script>
+</body>
+</html>

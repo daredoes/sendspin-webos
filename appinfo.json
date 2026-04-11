@@ -1,0 +1,13 @@
+{
+    "id": "com.sendspin.cinema",
+    "version": "1.0.0",
+    "vendor": "Open Source",
+    "type": "web",
+    "main": "index.html",
+    "title": "Sendspin Cinema",
+    "icon": "icon.png",
+    "permissions": [
+        "audioCapture",
+        "displayAll"
+    ]
+}
