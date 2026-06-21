@@ -1,7 +1,7 @@
 # Progress — Background Audio Daemon IPK
 
 **Resume point for the "convert Sendspin Cinema into a background audio daemon IPK" effort.**
-Last updated: 2026-06-20.
+Last updated: 2026-06-21 (Phase 2 sink validated on-device; JS service skeleton scaffolded).
 
 Full design lives in [`docs/background-daemon-ipk-plan.md`](./background-daemon-ipk-plan.md).
 This file is the short "where are we / what's next" snapshot.
@@ -19,41 +19,106 @@ flowchart LR
     P4 --> P5[Phase 5<br/>keep-alive + boot toggle]
     P5 --> P6[Phase 6<br/>single IPK + field test]
 
-    style P0 fill:#3a3a1a,color:#fff
-    style P1 fill:#3a3a1a,color:#fff
-    style P2 fill:#1a2a4a,color:#fff
+    style P0 fill:#1a3a1a,color:#fff
+    style P1 fill:#1a3a1a,color:#fff
+    style P2 fill:#2a3a1a,color:#fff
     style P3 fill:#1a2a4a,color:#fff
     style P4 fill:#1a2a4a,color:#fff
     style P5 fill:#1a2a4a,color:#fff
     style P6 fill:#1a2a4a,color:#fff
 ```
 
+- 🟨 **Phase 2 — sink path PROVEN on real hardware (2026-06-21); MA client + core extraction still pending.** The production sink `node → gst-launch stdin (fdsrc) → pulsesink` is validated for **both** MVP codecs. JS service skeleton scaffolded under `services/`. See "Phase 2 — sink VERDICT" below.
 - ✅ **Phase 1 — PASSED on real hardware (2026-06-20).** Background audio mixes with a live input. See "Phase 1 — VERDICT" below.
-- 🟡 **Phase 0 — ATTEMPTED, not completed (2026-06-20).** Benchmark built but never ran — blocked on file transport, not on decode. See "Phase 0 — STATUS" below.
+- ✅ **Phase 0 — COMPLETED on real hardware (2026-06-20).** Decode feasibility answered, and it **changed the decode strategy**: the on-device node is too old for the WASM decoders, but on-device **gstreamer** decodes FLAC to mixable PCM and plays it through `pulsesink`. Opus is the one open codec risk. See "Phase 0 — VERDICT" below.
 - ⬜ Phases 2–6 not started.
 
 ---
 
-## Phase 0 — STATUS: 🟡 incomplete (transport blocker, not a decode blocker)
+## Phase 2 — sink VERDICT: 🟨 sink path PROVEN on-device (2026-06-21)
 
-Goal: measure on-device (armv7l) node decode speed for Opus + FLAC at stream rate.
+The single biggest open architectural question after Phase 0 — *can the node-8 service
+actually drive a streamed gstreamer decode into pulsesink?* — is answered **YES**, for
+both MVP codecs, on the real TV (`root@192.168.1.32`).
 
-**Built (on host, ready to reuse):** in `/tmp/decbench/` —
-- Real 2 s test samples: `test.opus` (libopus 128k, 23 KB) + `test.flac` (level 5, 127 KB), generated with ffmpeg from a pink-noise+tone source (realistic decode load; duration-independent so 2 s is enough).
-- Self-contained **pure-WASM** decoders (no native build, run in plain node): `opus-decoder` (`OggOpusDecoder`) + `@wasm-audio-decoders/flac` (`FLACDecoder`).
-- `bench.js` — decodes in a 5 s loop, reports `SPEED=Nx realtime` and `COST=ms per audio-second`.
+### What ran (canonical wget transport, host `192.168.1.244`)
+1. **FLAC, streamed via node:** `feed_gst.js` (node 8.12) spawns
+   `gst-launch-1.0 fdsrc fd=0 ! flacparse ! avdec_flac ! audioconvert ! audioresample ! pulsesink`,
+   then chunk-feeds `/tmp/test.flac` (126 551 B, 4 KB chunks **with real `write()` backpressure /
+   `drain`**) into the child's stdin. Result: `PREROLLING → PREROLLED → PLAYING`, new
+   `GstPulseSinkClock`, clean **EOS**, `Execution ended after 0:00:02.081` (matches the 2 s sample),
+   `gst exit code=0`. This is exactly the production shape `node service → gst stdin → pulsesink`.
+2. **Raw PCM (S16LE/48k/stereo):** generated `/tmp/test.pcm` (192 512 B ≈ 1.003 s) on-device, then fed
+   through the **exact** service.js PCM pipeline `fdsrc ! rawaudioparse use-sink-caps=false format=pcm
+   pcm-format=s16le sample-rate=48000 num-channels=2 ! audioconvert ! audioresample ! pulsesink`.
+   Result: `PLAYING`, `GstPulseSinkClock`, clean **EOS**, `Execution ended after 0:00:01.153`, rc 0.
 
-**Why it didn't finish — transport, not benchmark:**
-- This TV's dropbear has **no working scp/sftp** (`scp`/`scp -O` both fail to land files).
-- Linux **`MAX_ARG_STRLEN` = 128 KB** caps base64-as-a-single-argument; empirically the working ceiling over the expect/pty wrapper was **~8 KB per command**.
-- Falling back to 8 KB base64 chunks (~50 round trips per file) was slow and, run in parallel, **exhausted dropbear's concurrent-session limit → SSH began timing out.** All local jobs killed; no reboot issued. Files left in `/tmp` are tmpfs-only (gone on power cycle); nothing installed/persisted.
+Both `rawaudioparse` and `fdsrc`/`appsrc` confirmed present via `gst-inspect-1.0`. `test.flac`/`test.opus`
+survived in `/tmp` from the Phase 0 run (TV uptime 5 h, no reboot).
 
-**Better transport for next attempt (pick one):**
-1. One-shot HTTP: run a temp `python3 -m http.server` on the host, `wget`/`curl` each file from the TV in a single connection (check the TV has `wget`/`curl` first).
-2. Single `node -e` over one ssh session that reads base64 from its own stdin and writes the file (one connection, no chunk storm).
-3. Keep chunking but **serialize** (never parallel) and raise the per-write size only to the proven ~8 KB.
+### What this nails down
+- **node → gst stdin → pulsesink is the production sink.** No WASM, no `pacat`, no cross-compile, no
+  custom C. `native/audio-helper/` stays a pure fallback.
+- **Both MVP codec contracts work** end-to-end on the box: FLAC (zero custom decode) and raw PCM. Pick
+  per Music Assistant output config; Opus stays out until an asm.js decoder (Phase 0 risk).
+- The sink lifecycle (spawn / stdin-feed / backpressure / EOS / exit) is captured as the `GstSink`
+  class in the new `service.js`.
 
-**Risk read:** low. Pure-WASM Opus/FLAC decode is well within an armv7l budget; Phase 0 is confirmation, not a gate. The real gate (Phase 1 mixing) is already ✅. Phase 0 can be retried anytime or folded into Phase 2 once `sendspin-core` exists.
+### Scaffolded this session — JS service skeleton (Phase 3 surface)
+`services/com.sendspin.cinema.service/`:
+- **`service.js`** — `webos-service` Luna registration (`play`, `pause`, `stop`, `setServer`,
+  `setPlayerName`, `setBootOnStart`, `status` subscription) + the hardware-validated **`GstSink`**
+  (codec-aware pipeline: FLAC default / PCM) + a dev `play({file})` feed path that exercises the sink
+  on-device. node-8 compatible (`var`/no-arrow), `node --check` clean. **TODO:** Music Assistant WS
+  client (replaces the file feed → `sink.write(frame)`), real PAUSED transition, `bootd` wiring.
+- **`services.json`** / **`package.json`** — Luna service manifest + node manifest (`main: service.js`).
+- Still to bundle for the IPK: `node_modules/webos-service`.
+
+Spike artifacts on host: `/tmp/p2stage/feed_gst.js`. TV files in `/tmp` (tmpfs).
+
+---
+
+## Phase 0 — VERDICT: ✅ COMPLETE (ran on the local rooted TV, 2026-06-20)
+
+Goal: prove we can decode Opus + FLAC at stream rate on-device. Answered — and the answer **redirects the decode strategy** away from JS/WASM toward on-device gstreamer.
+
+### Transport blocker — SOLVED
+The previous attempt died on file transport. Fixed this run, cleanly:
+- TV has **both `wget` and `curl`**. Host ran `python3 -m http.server 8099`; the TV pulled every file in **one connection each** (`wget http://<host>:8099/<file>`). No scp, no base64 chunk storm, no session exhaustion, no reboot. This is the canonical transport from now on.
+
+### The on-device node is too old for the WASM decoders — HARD WALL
+TV node is **v8.12.0** (V8 6.2, Nov-2017). The pure-WASM decoders (`opus-decoder`, `@wasm-audio-decoders/flac`) were made to run, JS-syntax-wise, by bundling each `dist/*.min.js` through **esbuild `--target=node8.12`** plus runtime polyfills injected ahead of `require`:
+- `globalThis` → `global`; `Array.prototype.flat`/`flatMap`; `TextDecoder`/`TextEncoder` from `require('util')`; `@eshaz/web-worker` aliased to a no-op `Worker` stub (we only use the synchronous, non-worker decoder path, but its `require('worker_threads')` is top-level).
+
+After all that the JS loads — and then **both decoders fail identically at WASM instantiation**:
+
+```
+CompileError: WasmCompile: Wasm decoding failed: unexpected section: Code @+NNN
+```
+
+Node 8.12's WebAssembly engine is MVP-era and rejects the modern emscripten output (it emits a bulk-memory **`DataCount`** section the old validator doesn't know, then mis-reads the following `Code` section). **No amount of JS down-levelling fixes this** — it's the WASM binary vs. the old engine. So "decode Opus/FLAC inside the TV's node via WASM" is **not viable as-is**. (A node8-MVP-targeted emscripten rebuild or an asm.js build would be required to revive this route — asm.js is plain JS and runs on the existing node 8, **no upgrade needed**.)
+
+### Can we just upgrade the on-device node? — Investigated, NO (not with a stock binary)
+- The system node `/usr/bin/node` sits on a **read-only** overlay (squashfs `/` is `ro` and 100% full) — it cannot be replaced. The supported shape would be **bundling our own node inside the IPK** and running the service under it (native service), not overwriting the system one.
+- But the TV node reports **`arm_float_abi: "softfp"`** (fpu neon, armv7, glibc 2.28, loader `/lib/ld-linux.so.3`). **Official nodejs.org `linux-armv7l` builds are hard-float (`armhf`/VFP).** Dropping `node-v16.20.2-linux-armv7l` on the TV and running it via the loader gave `error while loading shared libraries: internal error` — the classic **hardfp-binary-on-softfp-system** rejection. glibc/libstdc++ (6.0.25) are new enough; the **float ABI is the wall.**
+- So upgrading node means **sourcing or cross-compiling a `softfp` armv7 (glibc ≤2.28) node ≥12 build** (the webOS NDK toolchain, matching `softfp`/`neon`) — a real, separate effort and a new bundled dependency. **Not worth it:** gstreamer already covers decode with zero node involvement, and the only thing an upgrade would buy (Opus-in-JS via WASM) is achievable with **asm.js on the existing node 8.** Recommendation: **keep node 8** for control/protocol logic, decode in gstreamer.
+
+### The win: on-device gstreamer decodes to mixable PCM
+The TV ships a full gstreamer 1.x with audio plugins. This sidesteps both the WASM wall and any cross-compile:
+
+| Codec | On-device decoders | Result |
+|-------|--------------------|--------|
+| **FLAC** | `avdec_flac` (libav, software), `flacdec`, `omxflacdec` (HW), `flacparse`, `/usr/bin/flac` CLI | ✅ **Works fully.** `filesrc ! flacparse ! avdec_flac ! audioconvert ! pulsesink` **played the 2 s sample end-to-end (2.08 s, clean exit)**. Decode to `fakesink sync=false` finished in ~0.1 s wall → **~20× realtime in software.** |
+| **Opus** | `omxopusdec` (HW) only — **no software decoder** (no `avdec_opus`, `opusparse`, `opusdec`, or `opusdec` CLI) | ⚠️ **Open risk.** `omxopusdec` src caps are `audio/x-raw(mode:passthrough)` — a **hardware-tunneled** buffer that will not link to userspace `audioconvert`/`pulsesink` (`could not link omxopusdec to audioconvert`). It feeds the TV's HW audio path, not our mix. So Opus is **not** decodable to mixable userspace PCM on this box today. |
+
+Also present and relevant: `pulsesink`/`pulsesrc`, `alsasink`, `mpg123` (MP3 CLI).
+
+### What this changes
+- **The JS service does not need to decode audio.** Hand the encoded network stream to a gstreamer pipeline → `pulsesink` (which mixes with live HDMI per Phase 1). FLAC needs **zero** custom decode code, zero WASM, zero cross-compile — strictly better than the `pacat`-fed-PCM plan.
+- **Opus is the single codec risk.** Mitigations, easiest first: (a) configure **Music Assistant to stream FLAC or raw PCM** (MA supports output-format selection) and treat Opus as unsupported; (b) ship a pure-**asm.js** opus decoder (runs on node 8, no WASM) feeding `pacat`; (c) recompile libopus to MVP-WASM/asm.js. Recommend (a) for the MVP.
+- **Decision #2 (helper language) shifts again:** the decode+sink is now **gstreamer (C, on-device, HW-assisted)**. `native/audio-helper/` and the `pacat` path both demote to optional fallbacks (needed only for Opus-via-asm.js or for tighter buffer control).
+
+**Repro:** all artifacts staged on host at `/tmp/decstage/` (`bench.js` with the node8 polyfills, esbuild-bundled `opus8.js`/`flac8.js`, `worker-stub.js`, `test.opus`, `test.flac`); benchmark commands and the gstreamer pipelines above were run over the wget/HTTP transport. TV files live in `/tmp` (tmpfs — gone on power cycle; nothing installed/persisted).
 
 ---
 
@@ -122,15 +187,16 @@ flowchart LR
 
 ## What is BLOCKED / NEXT
 
-Nothing is hardware-blocked anymore — Phase 1 passed. Revised path given `pacat` exists on-device:
+Nothing is hardware-blocked — Phases 0 and 1 both passed. Revised path now that **gstreamer decodes on-device** (no JS/WASM decode, no cross-compile):
 
-1. **Phase 0 (quick, on-device):** benchmark Opus + FLAC decode in **on-device node** at stream rate (armv7l). Confirms the JS-Service decode keeps up before building it.
-2. **Phase 2:** extract `sendspin-core.js` from `sendspin-lib.js` — decode + drift/sync logic, replacing the `AudioContext` clock with a monotonic clock + the audio-sink's presentation timeline; add a Node-capable **FLAC** decoder. Output: timestamped PCM.
-3. **Phase 2 (sink):** feed PCM to **`pacat` over stdin** (no custom binary needed). Manage buffering/latency via pacat's `--latency-msec`. Keep `native/audio-helper/` only as a future optimization if pacat buffering proves too coarse.
-4. **Phase 3:** wrap core in `service.js`, expose Luna methods (`play`, `pause`, `setServer`, `setPlayerName`, `setBootOnStart`, `status` subscription), connect to MA, spawn/feed `pacat`.
-5. **Phase 4:** strip audio engine from `index.html`; add `config.html`; both subscribe to service `status` + send commands.
-6. **Phase 5:** `activitymanager` keep-alive + `bootd` registration driven by `bootOnStart`.
-7. **Phase 6:** package single IPK (app + `services/com.sendspin.cinema.service/`), `ares-install`, field test.
+1. ~~**Phase 0:** benchmark on-device node decode.~~ ✅ Done — see verdict above. Conclusion: **do not decode in node; decode in gstreamer.**
+2. **Decide the codec contract first (cheap, unblocks Phase 2):** confirm Music Assistant can serve **FLAC or raw PCM** to this player and make that the MVP format. Opus stays out until an asm.js decoder or MA transcode is in place (see Phase 0 "Opus is the single codec risk").
+3. ~~**Phase 2 (sink):** spawn a gstreamer pipeline fed via `fdsrc` from the service.~~ ✅ Done — `GstSink` in `service.js`, validated on-device for FLAC + PCM (see Phase 2 verdict). `native/audio-helper/`/`pacat` remain fallbacks.
+4. **Phase 2 (core):** extract `sendspin-core.js` from `sendspin-lib.js` — keep the Music-Assistant client + drift/sync logic, **drop the `AudioContext`/Web-Audio decode+playback** entirely. Replace the `AudioContext` clock with a monotonic clock + the gstreamer pipeline's running-time. Output: the encoded stream (or framed packets) + timing, not PCM. **This is the next concrete coding task.**
+5. **Phase 3:** wire the extracted core into the scaffolded `service.js` — replace the dev `play({file})` feed with the MA WebSocket client driving `sink.write(frame)`; implement real PAUSED. Luna surface already stubbed. Still need `node_modules/webos-service` bundled.
+6. **Phase 4:** strip audio engine from `index.html`; add `config.html`; both subscribe to service `status` + send commands.
+7. **Phase 5:** `activitymanager` keep-alive + `bootd` registration driven by `bootOnStart`.
+8. **Phase 6:** package single IPK (app + `services/com.sendspin.cinema.service/`), `ares-install`, field test.
 
 ### Optional parallel work (not hardware-blocked)
 - Scaffold IPK service skeleton now: `services/com.sendspin.cinema.service/{services.json,package.json}` + `config.html` stub. Can be done while TV testing proceeds.
@@ -139,9 +205,10 @@ Nothing is hardware-blocked anymore — Phase 1 passed. Revised path given `paca
 
 ## Key facts to remember on resume
 
-- **Test TV:** rooted webOS on the local network (credentials kept out of the repo — ask the owner), **armv7l**, kernel 4.4.84, PulseAudio 9.0. Has on-device: `node`, `pacat`, `paplay`, `pactl`, `pulseaudio`, `luna-send`, `amixer`. Lacks: `gcc`/`cc`. **Do not issue reboot commands.**
-- SSH from host needs `expect` password wrapper (`/tmp/tvssh.exp` pattern) — no persistent key allowed; macOS `scp` needs `-O` and is flaky, prefer `ssh "cat>file"` stdin or base64-echo for small files.
-- **Audio gating question: ANSWERED YES** — plain PA client mixes with live HDMI, no role needed. `pacat` is the sink; **no cross-compile required.**
+- **Test TV:** rooted webOS on the local network (credentials kept out of the repo — ask the owner), **armv7l**, kernel 4.4.84, PulseAudio 9.0, **node v8.12.0**. Has on-device: `node`, `pacat`, `paplay`, `pactl`, `pulseaudio`, `luna-send`, `amixer`, **`gst-launch-1.0`/`gst-inspect-1.0`** (with `avdec_flac`, `flacdec`, `omxflacdec`, `flacparse`, `omxopusdec`, `pulsesink`, `alsasink`), **`wget`, `curl`**, `/usr/bin/flac`, `mpg123`, `aplay`. Lacks: `gcc`/`cc`, `python3`, software Opus decoder. **Do not issue reboot commands.**
+- **Transport (use this):** host `python3 -m http.server 8099` + TV `wget http://<host-LAN-IP>:8099/<file>` — one connection per file, reliable. Beats scp/base64-chunking. (Host LAN IP last seen `192.168.1.244`; TV `192.168.1.32`.)
+- **node v8.12.0 is a wall for WASM:** its MVP-era V8 WebAssembly engine `CompileError`s on modern emscripten output. JS-syntax can be polyfilled (see Phase 0), the WASM binary cannot. → **decode in gstreamer, not node.**
+- **Audio gating question: ANSWERED YES** — plain PA client mixes with live HDMI, no role needed. Decode+sink = **gstreamer → `pulsesink`** (FLAC proven end-to-end); `pacat` and `native/audio-helper/` are fallbacks. **No cross-compile required.**
 - **Host has:** `ares-package`, `ares-install`, `cmake`, `cc` (host-only; can't link libpulse on macOS).
 - **Dev Mode** auto-removes side-loaded apps after ~50h.
 - App id: `com.sendspin.cinema`; planned service id: `com.sendspin.cinema.service`.

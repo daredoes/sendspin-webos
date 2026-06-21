@@ -1,0 +1,10 @@
+{
+  "name": "com.sendspin.cinema.service",
+  "version": "1.0.0",
+  "description": "Sendspin Cinema background audio daemon (Music Assistant client + gstreamer sink)",
+  "main": "service.js",
+  "engines": {
+    "node": ">=8.12.0"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,19 @@
+{
+  "id": "com.sendspin.cinema.service",
+  "description": "Sendspin Cinema background audio daemon",
+  "services": [
+    {
+      "name": "com.sendspin.cinema.service",
+      "description": "Background audio playback + Music Assistant client. Decodes via on-device gstreamer to pulsesink, mixing with live TV/HDMI.",
+      "commands": {
+        "play": "public",
+        "pause": "public",
+        "stop": "public",
+        "setServer": "public",
+        "setPlayerName": "public",
+        "setBootOnStart": "public",
+        "status": "public"
+      }
+    }
+  ]
+}
