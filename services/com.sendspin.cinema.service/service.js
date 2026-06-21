@@ -1,41 +1,61 @@
 /*
  * com.sendspin.cinema.service — background audio daemon for webOS.
  *
- * Headless JS service. Connects to Music Assistant, streams encoded audio, and
- * decodes on-device via gstreamer into pulsesink, which mixes with live TV/HDMI
- * audio (proven Phase 1 + Phase 2 on hardware: node -> gst-launch stdin ->
- * pulsesink, FLAC, clean EOS).
+ * Headless JS service. Acts as a Sendspin / Music Assistant player: connects over
+ * WebSocket, accepts pushed audio streams, and feeds each chunk's encoded payload
+ * to gstreamer -> pulsesink, which mixes with live TV/HDMI audio (Phase 1 + Phase 2,
+ * proven on hardware: node -> gst-launch stdin -> pulsesink, FLAC + PCM, clean EOS).
  *
- * node 8.12 compatible: no arrow fns, no const/let in hot paths, no async/await.
+ * Architecture:
+ *   sendspin-core.js  (extracted protocol/time-sync/state/player from sendspin-lib.js;
+ *                       transpiled to node 8 by build-core.mjs + esbuild)
+ *     -> GstAudioProcessor (headless; forwards encoded payload to an injected sink)
+ *        -> GstSink (this file; spawns gst-launch per negotiated codec)
+ *   node-env.js       (installs WebSocket/performance/URL/window globals for node 8)
  *
- * Status: Phase 3 skeleton. The GstSink (decode+play) path is the real, hardware-
- * validated piece. The Music Assistant WebSocket client is stubbed (TODO Phase 3)
- * so the Luna surface and sink lifecycle can be wired and tested independently.
+ * node 8.12 compatible: no arrow fns, no optional chaining, no class fields.
  */
+
+require('./node-env'); // must run before sendspin-core (installs globals)
 
 var Service = require('webos-service');
 var spawn = require('child_process').spawn;
+var core = require('./sendspin-core');
+var SendspinPlayer = core.SendspinPlayer;
 
 var SERVICE_ID = 'com.sendspin.cinema.service';
 var service = new Service(SERVICE_ID);
 
+var MA_SENDSPIN_PORT = 8927; // Music Assistant Sendspin player default port
+
 /* ------------------------------------------------------------------ state */
 
 var state = {
-  status: 'idle',          // idle | buffering | playing | paused | error
-  server: null,            // Music Assistant ws://host:port
+  status: 'idle',          // idle | connecting | buffering | playing | paused | error
+  server: null,            // Music Assistant host (ip or host[:port])
   playerName: 'Sendspin Cinema',
   bootOnStart: true,
-  codec: 'flac',           // flac (MVP) | pcm ; opus unsupported until asm.js decoder
-  track: null,             // { title, artist, ... } when known
+  track: null,             // { title, artist, artwork } when known
   error: null
 };
 
+var player = null;
 var statusSubscribers = [];
 
+function snapshot() {
+  return {
+    status: state.status,
+    server: state.server,
+    playerName: state.playerName,
+    bootOnStart: state.bootOnStart,
+    track: state.track,
+    error: state.error,
+    connected: !!(player && player.isConnected)
+  };
+}
+
 function pushStatus() {
-  var i;
-  for (i = statusSubscribers.length - 1; i >= 0; i--) {
+  for (var i = statusSubscribers.length - 1; i >= 0; i--) {
     try {
       statusSubscribers[i].respond({ returnValue: true, subscribed: true, state: snapshot() });
     } catch (e) {
@@ -44,62 +64,52 @@ function pushStatus() {
   }
 }
 
-function snapshot() {
-  return {
-    status: state.status,
-    server: state.server,
-    playerName: state.playerName,
-    bootOnStart: state.bootOnStart,
-    codec: state.codec,
-    track: state.track,
-    error: state.error
-  };
-}
-
 function setStatus(s, err) {
   state.status = s;
   state.error = err || null;
+  if (err) { console.error('Sendspin service:', err); }
   pushStatus();
 }
 
 /* -------------------------------------------------------------- GstSink */
-/* Hardware-validated sink: spawn gst-launch reading the encoded stream on
- * stdin (fdsrc), decode, and play through pulsesink. One sink per playback
- * session; recreated on track/codec change. */
+/* Hardware-validated sink: gst-launch reads the encoded stream on stdin (fdsrc),
+ * decodes per the negotiated codec, and plays through pulsesink (mixes with HDMI).
+ * One sink per stream format; GstAudioProcessor recreates it on codec/rate change. */
 
-function pipelineFor(codec) {
-  if (codec === 'pcm') {
-    // Raw S16LE 48k stereo from Music Assistant.
+function pipelineFor(format) {
+  var rate = format.sample_rate || 48000;
+  var ch = format.channels || 2;
+  if (format.codec === 'pcm') {
     return ['fdsrc fd=0',
-            'rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le sample-rate=48000 num-channels=2',
+            'rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le sample-rate=' + rate + ' num-channels=' + ch,
             'audioconvert', 'audioresample', 'pulsesink'];
   }
-  // Default: FLAC (proven end-to-end on device).
-  return ['fdsrc fd=0', 'flacparse', 'avdec_flac', 'audioconvert', 'audioresample', 'pulsesink'];
+  if (format.codec === 'flac') {
+    return ['fdsrc fd=0', 'flacparse', 'avdec_flac', 'audioconvert', 'audioresample', 'pulsesink'];
+  }
+  // Opus has no software decoder on this device; we never advertise it, so this
+  // should be unreachable. Fail loudly if the server negotiates it anyway.
+  throw new Error('unsupported codec for on-device gst sink: ' + format.codec);
 }
 
-function GstSink(codec) {
-  this.codec = codec || 'flac';
-  this.proc = null;
-}
-
-GstSink.prototype.start = function () {
-  var self = this;
-  var args = pipelineFor(this.codec).join(' ! ').split(' ');
+function GstSink(format) {
+  this.codec = format.codec;
+  this.sampleRate = format.sample_rate;
+  var args = pipelineFor(format).join(' ! ').split(' ');
+  console.log('Sendspin sink: gst-launch-1.0 ' + args.join(' '));
   this.proc = spawn('gst-launch-1.0', args, { stdio: ['pipe', 'inherit', 'inherit'] });
   this.proc.on('error', function (e) { setStatus('error', 'gst spawn: ' + e); });
-  this.proc.on('exit', function (code, sig) {
-    self.proc = null;
-    if (state.status === 'playing') setStatus('idle');
+  this.proc.on('exit', function (code) {
+    if (state.status === 'playing') { setStatus('buffering'); }
   });
   if (this.proc.stdin) {
-    this.proc.stdin.on('error', function () { /* sink closed; ignore broken pipe */ });
+    this.proc.stdin.on('error', function () { /* sink closed mid-write; ignore EPIPE */ });
   }
-  return this;
-};
+}
 
 GstSink.prototype.write = function (buf) {
   if (this.proc && this.proc.stdin && this.proc.stdin.writable) {
+    if (state.status === 'buffering' || state.status === 'connecting') { setStatus('playing'); }
     return this.proc.stdin.write(buf);
   }
   return false;
@@ -113,74 +123,115 @@ GstSink.prototype.stop = function () {
   }
 };
 
-var sink = null;
+/* ---------------------------------------------------- Music Assistant player */
 
-/* ---------------------------------------------------- Music Assistant (TODO) */
-/* Phase 3: open ws to state.server, subscribe to the player queue, and pipe the
- * encoded audio frames into sink.write(). For now playback is driven by an
- * explicit local file via play({file}) to exercise the sink on-device. */
+function buildBaseUrl(server) {
+  // Accept "1.2.3.4", "1.2.3.4:8927", "http://host", "ws://host:port".
+  var raw = server.indexOf('://') >= 0 ? server : 'http://' + server;
+  var u = new URL(raw);
+  var proto = (u.protocol === 'https:' || u.protocol === 'wss:') ? 'https:' : 'http:';
+  var port = u.port || String(MA_SENDSPIN_PORT);
+  return proto + '//' + u.hostname + ':' + port;
+}
 
-var fs = require('fs');
-function feedFile(path) {
-  var fd, buf, n, ok;
-  try { fd = fs.openSync(path, 'r'); } catch (e) { setStatus('error', 'open ' + path + ': ' + e); return; }
-  buf = Buffer.alloc(4096);
-  function pump() {
-    while (true) {
-      n = fs.readSync(fd, buf, 0, 4096, null);
-      if (n <= 0) { fs.closeSync(fd); if (sink) { try { sink.proc.stdin.end(); } catch (e) {} } return; }
-      ok = sink.write(Buffer.from(buf.slice(0, n)));
-      if (!ok && sink.proc) { sink.proc.stdin.once('drain', pump); return; }
-    }
+function onCoreState(s) {
+  if (s.serverState && s.serverState.metadata) {
+    var m = s.serverState.metadata;
+    state.track = {
+      title: m.title || null,
+      artist: m.artist || null,
+      artwork: m.artwork_url || m.art || m.image || null
+    };
   }
-  pump();
+  if (s.groupState && s.groupState.playback_state) {
+    state.status = (s.groupState.playback_state === 'playing') ? 'playing' : 'paused';
+  }
+  pushStatus();
+}
+
+function connect() {
+  if (player) { try { player.disconnect(); } catch (e) {} player = null; }
+  if (!state.server) { setStatus('idle'); return; }
+  var baseUrl;
+  try { baseUrl = buildBaseUrl(state.server); }
+  catch (e) { setStatus('error', 'bad server "' + state.server + '": ' + e); return; }
+
+  var safeId = 'webos-' + state.playerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  player = new SendspinPlayer({
+    playerId: safeId,
+    clientName: state.playerName,
+    baseUrl: baseUrl,
+    codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
+    storage: null,
+    createSink: function (format) { return new GstSink(format); },
+    onStateChange: onCoreState
+  });
+  setStatus('connecting');
+  player.connect().catch(function (e) { setStatus('error', 'connect ' + baseUrl + ': ' + e); });
+}
+
+function forward(command) {
+  if (!player || !player.isConnected) { return { ok: false, reason: 'not connected' }; }
+  try { player.sendCommand(command); return { ok: true }; }
+  catch (e) { return { ok: false, reason: String(e) }; }
 }
 
 /* --------------------------------------------------------------- Luna API */
 
-service.register('play', function (msg) {
-  var p = msg.payload || {};
-  if (p.codec) state.codec = p.codec;
-  if (sink) sink.stop();
-  sink = new GstSink(state.codec).start();
-  setStatus('playing');
-  if (p.file) feedFile(p.file);          // dev/test path; MA stream replaces this
-  msg.respond({ returnValue: true, state: snapshot() });
-});
-
-service.register('pause', function (msg) {
-  // gstreamer pause is a pipeline state change; for the stdin-fed sink we hold
-  // the feed. Full PAUSED transition lands with the libgst host in Phase 3.
-  if (state.status === 'playing') setStatus('paused');
-  msg.respond({ returnValue: true, state: snapshot() });
-});
-
-service.register('stop', function (msg) {
-  if (sink) { sink.stop(); sink = null; }
-  setStatus('idle');
-  msg.respond({ returnValue: true, state: snapshot() });
-});
-
 service.register('setServer', function (msg) {
   state.server = (msg.payload && msg.payload.server) || null;
-  pushStatus();
-  msg.respond({ returnValue: true, server: state.server });
+  connect();
+  msg.respond({ returnValue: true, state: snapshot() });
 });
 
 service.register('setPlayerName', function (msg) {
   state.playerName = (msg.payload && msg.payload.playerName) || state.playerName;
-  pushStatus();
-  msg.respond({ returnValue: true, playerName: state.playerName });
+  if (state.server) { connect(); } // re-register under the new name
+  msg.respond({ returnValue: true, state: snapshot() });
 });
 
 service.register('setBootOnStart', function (msg) {
   state.bootOnStart = !!(msg.payload && msg.payload.bootOnStart);
-  // TODO Phase 5: register/unregister bootd activity per this flag.
+  // TODO Phase 5: register/unregister a bootd activity per this flag.
   pushStatus();
   msg.respond({ returnValue: true, bootOnStart: state.bootOnStart });
 });
 
+service.register('play', function (msg) {
+  if (!player) { connect(); }
+  var r = forward('play');
+  msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
+});
+
+service.register('pause', function (msg) {
+  var r = forward('pause');
+  msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
+});
+
+service.register('stop', function (msg) {
+  var r = forward('stop');
+  msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
+});
+
+service.register('next', function (msg) {
+  var r = forward('next');
+  msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
+});
+
+service.register('previous', function (msg) {
+  var r = forward('previous');
+  msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
+});
+
+service.register('disconnect', function (msg) {
+  if (player) { try { player.disconnect(); } catch (e) {} player = null; }
+  setStatus('idle');
+  msg.respond({ returnValue: true, state: snapshot() });
+});
+
 service.register('status', function (msg) {
-  if (msg.isSubscription) statusSubscribers.push(msg);
+  if (msg.isSubscription) { statusSubscribers.push(msg); }
   msg.respond({ returnValue: true, subscribed: !!msg.isSubscription, state: snapshot() });
 });
+
+console.log('Sendspin Cinema service ready:', SERVICE_ID);

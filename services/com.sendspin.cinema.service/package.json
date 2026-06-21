@@ -6,5 +6,10 @@
   "engines": {
     "node": ">=8.12.0"
   },
-  "dependencies": {}
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {
+    "ws": "7.5.10"
+  }
 }

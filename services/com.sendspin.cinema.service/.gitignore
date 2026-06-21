@@ -1,0 +1,3 @@
+node_modules/
+src/sendspin-core.entry.mjs
+package-lock.json
