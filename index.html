@@ -205,6 +205,10 @@
                 <label for="input-name">Player name</label>
                 <input type="text" id="input-name" placeholder="Cinema TV">
             </div>
+            <div class="field">
+                <label for="input-vol">Default volume (0&ndash;100)</label>
+                <input type="text" id="input-vol" inputmode="numeric" placeholder="70">
+            </div>
             <div class="actions">
                 <button class="action-btn primary" id="save-btn" onclick="saveSetup()">Save &amp; Connect</button>
                 <button class="action-btn" id="cancel-btn" onclick="closeSettings()" style="display:none">Cancel</button>
@@ -288,6 +292,9 @@
         var lastStatus = null;       // most recent service snapshot (source of truth)
         var autoOpened = false;      // true when setup was opened because nothing is configured
         var decidedInitial = false;  // have we made the first show-setup-or-not decision?
+        // Progress is interpolated locally between status pushes (MA only sends a new
+        // position on play/pause/track change), resynced whenever a status arrives.
+        var progDuration = 0, progPos = 0, progWall = 0, progPlaying = false;
 
         // ---------------------------------------------------------------- config
         // The service loses in-memory config when webOS idle-recycles it, so the
@@ -298,7 +305,8 @@
                 port: localStorage.getItem('ma_port') || '',
                 user: localStorage.getItem('ma_user') || '',
                 pass: localStorage.getItem('ma_pass') || '',
-                name: localStorage.getItem('ma_name') || 'Cinema TV'
+                name: localStorage.getItem('ma_name') || 'Cinema TV',
+                vol: localStorage.getItem('ma_vol') || '70'
             };
         }
         function hasCfg() { return !!localStorage.getItem('ma_host'); }
@@ -326,11 +334,13 @@
                 c.user = lastStatus.username || '';
                 c.name = lastStatus.playerName || c.name;
             }
+            if (!hasCfg() && lastStatus && lastStatus.defaultVolume != null) { c.vol = String(lastStatus.defaultVolume); }
             document.getElementById('input-host').value = c.host;
             document.getElementById('input-port').value = c.port;
             document.getElementById('input-user').value = c.user;
             document.getElementById('input-pass').value = c.pass;
             document.getElementById('input-name').value = c.name;
+            document.getElementById('input-vol').value = c.vol;
             var configured = hasCfg() || !!(lastStatus && lastStatus.server);
             document.getElementById('cancel-btn').style.display = configured ? 'block' : 'none';
             setupStatus.textContent = '';
@@ -347,6 +357,7 @@
             var user = document.getElementById('input-user').value.trim();
             var pass = document.getElementById('input-pass').value;
             var name = document.getElementById('input-name').value.trim() || 'Cinema TV';
+            var vol = document.getElementById('input-vol').value.trim();
             if (!host) {
                 setupStatus.textContent = 'Enter a server URL or IP';
                 setupStatus.className = 'err';
@@ -358,6 +369,7 @@
             localStorage.setItem('ma_user', user);
             localStorage.setItem('ma_pass', pass);
             localStorage.setItem('ma_name', name);
+            localStorage.setItem('ma_vol', vol || '70');
 
             setupStatus.textContent = 'Connecting…';
             setupStatus.className = '';
@@ -426,17 +438,32 @@
                 lunaCall('setServer', {
                     server: buildServer(c.host, c.port),
                     username: c.user || '',
-                    password: c.pass || ''
+                    password: c.pass || '',
+                    defaultVolume: c.vol || '70'
                 }, function (res) { if (done) done(res); });
             });
         }
 
         // --------------------------------------------------------------- rendering
-        function formatTime(sec) {
-            if (!sec || sec < 0) { return '0:00'; }
-            var s = Math.floor(sec);
+        // MA reports track_duration/track_progress in MILLISECONDS.
+        function formatTime(ms) {
+            if (!ms || ms < 0) { return '0:00'; }
+            var s = Math.floor(ms / 1000);
             return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
         }
+
+        // Draw the progress bar/labels from the last synced position, advanced by
+        // wall-clock time while playing. Called on each status and on a local tick.
+        function renderProgress() {
+            if (!progDuration) { return; }
+            var cur = progPlaying ? (progPos + (Date.now() - progWall)) : progPos;
+            if (cur < 0) { cur = 0; }
+            if (cur > progDuration) { cur = progDuration; }
+            timeTotal.textContent = formatTime(progDuration);
+            timeCurrent.textContent = formatTime(cur);
+            progressBar.style.width = (cur / progDuration * 100) + '%';
+        }
+        setInterval(function () { if (progPlaying) { renderProgress(); } }, 500);
 
         function updateTheme(url) {
             if (!url) { return; }
@@ -509,10 +536,14 @@
             }
 
             if (t.duration) {
-                timeTotal.textContent = formatTime(t.duration);
-                timeCurrent.textContent = formatTime(t.position || 0);
-                progressBar.style.width = Math.max(0, Math.min(100, (t.position || 0) / t.duration * 100)) + '%';
+                progDuration = t.duration;
+                progPos = t.position || 0;
+                progWall = Date.now();
+                progPlaying = (st.status === 'playing');
+                renderProgress();
             } else {
+                progDuration = 0;
+                progPlaying = false;
                 timeTotal.textContent = '0:00';
                 timeCurrent.textContent = '0:00';
                 progressBar.style.width = '0%';
@@ -560,6 +591,24 @@
             els[Math.max(0, Math.min(els.length - 1, i + dir))].focus();
         }
 
+        // ------------------------------------------------- remote transport keys
+        // The TV remote's media keys arrive as keydown on the focused app. Map them
+        // to the service's transport commands. Covers both the DOM e.key names and
+        // the webOS VK_ keyCodes; FF/REW double as next/previous (basic remotes have
+        // no dedicated track-skip keys).
+        function handleMediaKey(e) {
+            var k = e.key, kc = e.keyCode;
+            if (k === 'MediaPlay' || kc === 415) { lunaCall('play', {}); }
+            else if (k === 'MediaPause' || kc === 19) { lunaCall('pause', {}); }
+            else if (k === 'MediaPlayPause' || kc === 463 || kc === 179) { lunaCall(isPlaying ? 'pause' : 'play', {}); }
+            else if (k === 'MediaStop' || kc === 413) { lunaCall('stop', {}); }
+            else if (k === 'MediaTrackNext' || k === 'MediaFastForward' || kc === 417 || kc === 425) { lunaCall('next', {}); }
+            else if (k === 'MediaTrackPrevious' || k === 'MediaRewind' || kc === 412 || kc === 424) { lunaCall('previous', {}); }
+            else { return false; }
+            e.preventDefault();
+            return true;
+        }
+
         // ----------------------------------------------------------------- chrome
         function showUI() {
             document.getElementById('main-body').classList.add('show-ui');
@@ -571,7 +620,10 @@
         window.addEventListener('mousemove', showUI);
         window.addEventListener('keydown', function (e) {
             showUI();
-            if (setupOverlay.style.display !== 'flex') { return; }
+            if (setupOverlay.style.display !== 'flex') {
+                handleMediaKey(e); // now-playing screen: remote transport keys
+                return;
+            }
             var k = e.key, kc = e.keyCode;
             if (k === 'ArrowDown' || kc === 40) { e.preventDefault(); moveFocus(1); return; }
             if (k === 'ArrowUp' || kc === 38) { e.preventDefault(); moveFocus(-1); return; }
