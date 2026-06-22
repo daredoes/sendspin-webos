@@ -56,7 +56,8 @@ function start(port, handlers) {
           server: body.server,
           username: body.username || '',
           password: body.password || '',
-          playerName: body.playerName || ''
+          playerName: body.playerName || '',
+          defaultVolume: body.defaultVolume
         });
         send(res, 200, { state: state });
       });
@@ -109,6 +110,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '<label>Username (optional)</label><input id="user" autocapitalize="off" autocomplete="username">' +
 '<label>Password (optional)</label><input id="pass" type="password" autocomplete="current-password">' +
 '<label>Player name</label><input id="name" placeholder="Cinema TV">' +
+'<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="70">' +
 '<button class="primary" id="saveBtn" type="button">Save &amp; Connect</button>' +
 '<div id="msg"></div></div><script>' +
 'function $(i){return document.getElementById(i)}' +
@@ -116,7 +118,8 @@ var PAGE = '<!DOCTYPE html>\n' +
 'function refresh(){fetch("/api/status").then(function(r){return r.json()}).then(function(d){var s=d.state||{};' +
 '$("conn").textContent=(s.connected?"Connected":(s.status||"idle"))+(s.error?(" — "+s.error):"");' +
 'if(s.server&&!$("host").value)$("host").value=s.server;if(s.username&&!$("user").value)$("user").value=s.username;' +
-'if(s.playerName&&!$("name").value)$("name").value=s.playerName}).catch(function(){})}' +
+'if(s.playerName&&!$("name").value)$("name").value=s.playerName;' +
+'if(s.defaultVolume!=null&&$("vol").value==="")$("vol").value=s.defaultVolume}).catch(function(){})}' +
 '$("scanBtn").onclick=function(){setMsg("Scanning…");$("scanBtn").disabled=true;' +
 'fetch("/api/discover").then(function(r){return r.json()}).then(function(d){$("scanBtn").disabled=false;' +
 'var box=$("servers");box.innerHTML="";var list=d.servers||[];if(!list.length){setMsg("No servers found. Enter the address manually.","err");return}' +
@@ -127,7 +130,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '$("saveBtn").onclick=function(){var host=$("host").value.trim();if(!host){setMsg("Enter a server URL or IP","err");return}' +
 'var server=host;var port=$("port").value.trim();if(port&&!/:[0-9]+($|\\/)/.test(host.replace(/^\\w+:\\/\\//,"")))server=host.replace(/\\/+$/,"")+":"+port;' +
 'setMsg("Saving…");fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({' +
-'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV"})})' +
+'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV",defaultVolume:$("vol").value.trim()})})' +
 '.then(function(r){return r.json()}).then(function(d){if(d.error){setMsg("Error: "+d.error,"err");return}' +
 'setMsg("Saved. Connecting to Music Assistant…","ok");setTimeout(refresh,1500)}).catch(function(e){setMsg("Save failed: "+e,"err")})};' +
 'refresh();setInterval(refresh,4000);</script></body></html>';

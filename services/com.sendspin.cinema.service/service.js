@@ -25,6 +25,7 @@ var GstSink = require('./gst-sink').GstSink;
 var maLogin = require('./ma-login');
 var mdns = require('./mdns-discover');
 var configHttp = require('./config-http');
+var persist = require('./persist');
 var os = require('os');
 
 var SERVICE_ID = 'com.sendspin.cinema.service';
@@ -68,9 +69,16 @@ var state = {
   password: null,
   playerName: 'Sendspin Cinema',
   bootOnStart: true,
+  defaultVolume: 70,       // 0..100 volume applied to a fresh player (until MA sets one)
   track: null,             // { title, artist, artwork } when known
   error: null
 };
+
+function clampVol(v) {
+  var n = parseInt(v, 10);
+  if (isNaN(n)) { return null; }
+  return Math.max(0, Math.min(100, n));
+}
 
 var player = null;
 var statusSubscribers = [];
@@ -109,6 +117,7 @@ function snapshot() {
     username: state.username,        // password is never echoed back
     playerName: state.playerName,
     bootOnStart: state.bootOnStart,
+    defaultVolume: state.defaultVolume,
     track: state.track,
     error: state.error,
     connected: !!(player && player.isConnected),
@@ -198,6 +207,10 @@ function startPlayer(baseUrl, authToken, gen) {
     onStateChange: function (s) { if (thisPlayer === player) { onCoreState(s); } }
   });
   player = thisPlayer;
+  // Seed the player with the configured default volume; MA may override it on
+  // connect if it remembers a volume for this player. Applied to the stream when
+  // the first sink is created.
+  try { thisPlayer.setVolume(state.defaultVolume); } catch (e) { dbg('setVolume default failed ' + e); }
   dbg('startPlayer connecting gen=' + gen + ' to ' + baseUrl);
   player.connect()
     .then(function () { dbg('player.connect() resolved isConnected=' + thisPlayer.isConnected); })
@@ -235,13 +248,29 @@ function forward(command) {
 
 /* Shared config entry point used by both the Luna API (setServer) and the LAN
  * config web server (POST /api/config). Sets server/creds/name and (re)connects. */
+function savePersist() {
+  persist.save({
+    server: state.server,
+    username: state.username,
+    password: state.password,
+    playerName: state.playerName,
+    bootOnStart: state.bootOnStart,
+    defaultVolume: state.defaultVolume
+  });
+}
+
 function applyConfig(p) {
   p = p || {};
   dbg('applyConfig server=' + p.server);
   if (p.playerName) { state.playerName = p.playerName; }
+  if (p.defaultVolume !== undefined && p.defaultVolume !== null && p.defaultVolume !== '') {
+    var dv = clampVol(p.defaultVolume);
+    if (dv !== null) { state.defaultVolume = dv; }
+  }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
   if (p.password !== undefined) { state.password = p.password || null; }
+  savePersist();   // survive app reinstall / reboot
   connect();
   return snapshot();
 }
@@ -262,12 +291,14 @@ service.register('discover', function (msg) {
 
 service.register('setPlayerName', function (msg) {
   state.playerName = (msg.payload && msg.payload.playerName) || state.playerName;
+  savePersist();
   if (state.server) { connect(); } // re-register under the new name
   msg.respond({ returnValue: true, state: snapshot() });
 });
 
 service.register('setBootOnStart', function (msg) {
   state.bootOnStart = !!(msg.payload && msg.payload.bootOnStart);
+  savePersist();
   // TODO Phase 5: register/unregister a bootd activity per this flag.
   pushStatus();
   msg.respond({ returnValue: true, bootOnStart: state.bootOnStart });
@@ -301,6 +332,7 @@ service.register('previous', function (msg) {
 
 service.register('disconnect', function (msg) {
   state.server = null;
+  savePersist();                         // forget the server across reinstall/reboot too
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
   setStatus('idle');                     // keep-alive stays so the LAN config UI lives on
   msg.respond({ returnValue: true, state: snapshot() });
@@ -323,5 +355,20 @@ configHttp.start(CONFIG_HTTP_PORT, {
   applyConfig: applyConfig
 });
 startKeepAlive();
+
+/* Restore config saved on the persistent partition (survives app reinstall/reboot)
+ * and reconnect on our own — no need to wait for the app to re-push it. */
+(function restorePersisted() {
+  var saved = persist.load();
+  if (!saved) { dbg('no persisted config'); return; }
+  if (saved.playerName) { state.playerName = saved.playerName; }
+  if (typeof saved.bootOnStart === 'boolean') { state.bootOnStart = saved.bootOnStart; }
+  if (saved.defaultVolume !== undefined) { var sv = clampVol(saved.defaultVolume); if (sv !== null) { state.defaultVolume = sv; } }
+  state.server = saved.server || null;
+  state.username = saved.username || null;
+  state.password = saved.password || null;
+  dbg('restored persisted config server=' + state.server + ' (' + persist.path() + ')');
+  if (state.server) { connect(); }
+})();
 
 console.log('Sendspin Cinema service ready:', SERVICE_ID);

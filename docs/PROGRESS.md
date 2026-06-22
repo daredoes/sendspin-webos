@@ -46,6 +46,36 @@ flowchart LR
 
 ---
 
+## 2026-06-21 (even later) — config persistence, default volume, time + media keys
+
+Batch of fixes after field use (all verified on `192.168.1.32`, live MA playback):
+
+- **Config persists across reinstall AND reboot.** `persist.js` writes the config
+  (server/creds/playerName/bootOnStart/defaultVolume) to a file; the service loads it
+  at startup and reconnects on its own. ⚑ **The managed JS service is jailed** —
+  from inside it, `/media/developer`, `/var/luna/preferences`, `/home/root`,
+  `/cryptofs` are all **NOT writable**; only **`/media/internal`** (and `/tmp`) are.
+  `/media/internal` is `/dev/mmcblk0p53` ext4 (rw) bind-mounted into the jail
+  (`/var/palm/jail/com.sendspin.cinema.service/media/internal`) — a real persistent
+  partition, so it survives reinstall + reboot. `/tmp` is the last-resort fallback
+  (tmpfs; reinstall-only). Password is stored plaintext (homebrew/trusted LAN).
+- **Default volume setting (default 70).** `state.defaultVolume`, persisted +
+  configurable in both UIs; `startPlayer` seeds the player via `setVolume` (MA may
+  override if it remembers a volume). config-http's POST handler must forward
+  `defaultVolume` to `applyConfig` (was dropped → stuck at 70).
+- **Track time was wrong (showed "3183").** MA reports `track_duration`/`track_progress`
+  in **milliseconds**; the rewritten `formatTime` had treated them as seconds. Fixed
+  to `/1000`.
+- **Playback timer froze between pushes.** MA only pushes a new position on
+  play/pause/track-change, so the UI now **interpolates locally** (last synced
+  position + wall-clock delta, resynced on each status; a 500 ms tick advances it
+  while playing).
+- **Remote transport keys.** `index.html` maps the TV remote's Media*/VK_ keys
+  (Play 415, Pause 19, Stop 413, FF 417→next, REW 412→previous, plus DOM `MediaTrackNext/
+  Previous`) to the Luna transport commands on the now-playing screen.
+
+---
+
 ## 2026-06-21 (later) — stream-only volume + config UI as a Luna client
 
 Two user-facing fixes, both built + installed + verified on `root@192.168.1.32`.
