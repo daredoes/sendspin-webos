@@ -19,9 +19,9 @@
 require('./node-env'); // must run before sendspin-core (installs globals)
 
 var Service = require('webos-service');
-var spawn = require('child_process').spawn;
 var core = require('./sendspin-core');
 var SendspinPlayer = core.SendspinPlayer;
+var GstSink = require('./gst-sink').GstSink;
 
 var SERVICE_ID = 'com.sendspin.cinema.service';
 var service = new Service(SERVICE_ID);
@@ -71,57 +71,19 @@ function setStatus(s, err) {
   pushStatus();
 }
 
-/* -------------------------------------------------------------- GstSink */
-/* Hardware-validated sink: gst-launch reads the encoded stream on stdin (fdsrc),
- * decodes per the negotiated codec, and plays through pulsesink (mixes with HDMI).
- * One sink per stream format; GstAudioProcessor recreates it on codec/rate change. */
+/* ----------------------------------------------------------------- sink */
+/* GstSink lives in gst-sink.js (reusable + on-device testable). Wrap each one so
+ * its lifecycle events drive the service status. */
 
-function pipelineFor(format) {
-  var rate = format.sample_rate || 48000;
-  var ch = format.channels || 2;
-  if (format.codec === 'pcm') {
-    return ['fdsrc fd=0',
-            'rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le sample-rate=' + rate + ' num-channels=' + ch,
-            'audioconvert', 'audioresample', 'pulsesink'];
-  }
-  if (format.codec === 'flac') {
-    return ['fdsrc fd=0', 'flacparse', 'avdec_flac', 'audioconvert', 'audioresample', 'pulsesink'];
-  }
-  // Opus has no software decoder on this device; we never advertise it, so this
-  // should be unreachable. Fail loudly if the server negotiates it anyway.
-  throw new Error('unsupported codec for on-device gst sink: ' + format.codec);
-}
-
-function GstSink(format) {
-  this.codec = format.codec;
-  this.sampleRate = format.sample_rate;
-  var args = pipelineFor(format).join(' ! ').split(' ');
-  console.log('Sendspin sink: gst-launch-1.0 ' + args.join(' '));
-  this.proc = spawn('gst-launch-1.0', args, { stdio: ['pipe', 'inherit', 'inherit'] });
-  this.proc.on('error', function (e) { setStatus('error', 'gst spawn: ' + e); });
-  this.proc.on('exit', function (code) {
-    if (state.status === 'playing') { setStatus('buffering'); }
+function makeSink(format) {
+  return new GstSink(format, function (name, detail) {
+    if (name === 'error') { setStatus('error', 'gst: ' + detail); }
+    else if (name === 'exit') { if (state.status === 'playing') { setStatus('buffering'); } }
+    else if (name === 'write') {
+      if (state.status === 'buffering' || state.status === 'connecting') { setStatus('playing'); }
+    }
   });
-  if (this.proc.stdin) {
-    this.proc.stdin.on('error', function () { /* sink closed mid-write; ignore EPIPE */ });
-  }
 }
-
-GstSink.prototype.write = function (buf) {
-  if (this.proc && this.proc.stdin && this.proc.stdin.writable) {
-    if (state.status === 'buffering' || state.status === 'connecting') { setStatus('playing'); }
-    return this.proc.stdin.write(buf);
-  }
-  return false;
-};
-
-GstSink.prototype.stop = function () {
-  if (this.proc) {
-    try { this.proc.stdin.end(); } catch (e) {}
-    try { this.proc.kill('SIGTERM'); } catch (e) {}
-    this.proc = null;
-  }
-};
 
 /* ---------------------------------------------------- Music Assistant player */
 
@@ -163,7 +125,7 @@ function connect() {
     baseUrl: baseUrl,
     codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
     storage: null,
-    createSink: function (format) { return new GstSink(format); },
+    createSink: makeSink,
     onStateChange: onCoreState
   });
   setStatus('connecting');

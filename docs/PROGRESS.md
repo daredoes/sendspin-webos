@@ -21,15 +21,15 @@ flowchart LR
 
     style P0 fill:#1a3a1a,color:#fff
     style P1 fill:#1a3a1a,color:#fff
-    style P2 fill:#2a3a1a,color:#fff
-    style P3 fill:#1a2a4a,color:#fff
+    style P2 fill:#1a3a1a,color:#fff
+    style P3 fill:#2a3a1a,color:#fff
     style P4 fill:#1a2a4a,color:#fff
     style P5 fill:#1a2a4a,color:#fff
     style P6 fill:#1a2a4a,color:#fff
 ```
 
-- 🟨 **Phase 2 — sink PROVEN on hardware + core EXTRACTED & host-validated (2026-06-21).** Production sink `node → gst-launch stdin (fdsrc) → pulsesink` validated for both MVP codecs. `sendspin-core.js` extracted from `sendspin-lib.js` (protocol/time-sync/state/player, Web-Audio decode dropped), transpiled to node 8, wired to the gst sink, and exercised end-to-end on host node 22 — **on-device node-8 load test still pending (TV dropped off the network mid-push).** See "Phase 2 — core VERDICT" below.
-- 🟨 **Phase 3 — JS service skeleton with real protocol wiring (2026-06-21).** `services/com.sendspin.cinema.service/` connects via `SendspinPlayer`, feeds chunks to `GstSink`, exposes Luna methods. MA round-trip untested (needs a server + the TV).
+- ✅ **Phase 2 — COMPLETE on hardware (2026-06-21).** Production sink `node → gst-launch stdin (fdsrc) → pulsesink` validated for both MVP codecs, AND `sendspin-core.js` (extracted protocol/time-sync/state/player, Web-Audio decode dropped) **runs on the TV's node 8.12** and drives the full real-audio path end-to-end: 31 protocol-framed FLAC chunks → `GstAudioProcessor` → `GstSink` → `pulsesink`, clean EOS. See "Phase 2 — core VERDICT" below.
+- 🟨 **Phase 3 — JS service with real protocol wiring (2026-06-21).** `services/com.sendspin.cinema.service/` connects via `SendspinPlayer`, feeds chunks to `GstSink`, exposes Luna methods. Loads + audio path proven on node 8; **only the live MA WebSocket round-trip is untested (needs a running Music Assistant).**
 - ✅ **Phase 1 — PASSED on real hardware (2026-06-20).** Background audio mixes with a live input. See "Phase 1 — VERDICT" below.
 - ✅ **Phase 0 — COMPLETED on real hardware (2026-06-20).** Decode feasibility answered, and it **changed the decode strategy**: the on-device node is too old for the WASM decoders, but on-device **gstreamer** decodes FLAC to mixable PCM and plays it through `pulsesink`. Opus is the one open codec risk. See "Phase 0 — VERDICT" below.
 - ⬜ Phases 2–6 not started.
@@ -77,12 +77,17 @@ to the server. No special-casing needed.
 
 ### Validation
 - **Host node 22 (`smoke-test.js`):** core loads; `performance.now()`, `WebSocket.OPEN` present;
-  `SendspinPlayer` constructs; setting a fake `flac` format + a `[4][ts][payload]` chunk →
+  `SendspinPlayer` constructs; fake `flac` format + a `[4][ts][payload]` chunk →
   **1 sink created, 1 encoded payload forwarded**; `connect()` to a dead host rejects cleanly.
-- **On-device (node 8.12): PENDING.** The TV went unreachable (100% ping loss; it had been at
-  load avg ~36) while pushing the service tree, before the node-8 load test ran. Re-run when it's
-  back: push `services/com.sendspin.cinema.service/` (incl. `node_modules/ws`) and
-  `node /tmp/svc/.../smoke-test.js` under node 8. **Do not reboot the TV.**
+- **✅ On-device node 8.12 (`smoke-test.js`):** identical results on the TV — bundled `ws`
+  provides `WebSocket` (OPEN=1), `performance.now()` works, player constructs, 1 sink / 1 forward,
+  `connect()` → clean `ECONNREFUSED`.
+- **✅ On-device real-audio path (`test-real-sink.js`):** the real `GstSink` (not a fake) fed by
+  `GstAudioProcessor` from `/tmp/test.flac` re-framed into 31 protocol chunks → gst
+  `PREROLL → PLAYING → GstPulseSinkClock → clean EOS`, `Execution ended after 0:00:02.081`,
+  exit 0. **This is the exact data path a live Music Assistant stream uses, end-to-end on node 8.**
+- **Still untested:** the WebSocket handshake/codec negotiation against a *running* Music
+  Assistant (needs an MA instance on the LAN). **Do not reboot the TV.**
 
 ---
 
@@ -243,8 +248,8 @@ Nothing is hardware-blocked — Phases 0 and 1 both passed. Revised path now tha
 1. ~~**Phase 0:** benchmark on-device node decode.~~ ✅ Done — see verdict above. Conclusion: **do not decode in node; decode in gstreamer.**
 2. **Decide the codec contract first (cheap, unblocks Phase 2):** confirm Music Assistant can serve **FLAC or raw PCM** to this player and make that the MVP format. Opus stays out until an asm.js decoder or MA transcode is in place (see Phase 0 "Opus is the single codec risk").
 3. ~~**Phase 2 (sink):** spawn a gstreamer pipeline fed via `fdsrc` from the service.~~ ✅ Done — `GstSink` in `service.js`, validated on-device for FLAC + PCM (see Phase 2 verdict). `native/audio-helper/`/`pacat` remain fallbacks.
-4. ~~**Phase 2 (core):** extract `sendspin-core.js`, drop Web-Audio, feed gst sink.~~ ✅ Done & host-validated (see core verdict). **Immediate next step: re-run `smoke-test.js` on the TV's node 8** to confirm the bundle loads on-device (was blocked only by the TV going offline).
-5. ~~**Phase 3 (wiring):** wire core into `service.js`.~~ ✅ Done — `service.js` builds a `SendspinPlayer`, injects the `GstSink` factory, maps `onStateChange`→status, forwards `play/pause/stop/next/previous` as controller commands. **Remaining:** real end-to-end test against a live Music Assistant (needs MA server + TV); `pactl` volume in `GstAudioProcessor.updateVolume`; confirm MA's Sendspin port/path (`/sendspin`, default 8927) against a real instance.
+4. ~~**Phase 2 (core):** extract `sendspin-core.js`, drop Web-Audio, feed gst sink, validate on node 8.~~ ✅ Done & validated on-device (load + full real-audio path, see core verdict).
+5. ~~**Phase 3 (wiring):** wire core into `service.js`.~~ ✅ Done — `service.js` builds a `SendspinPlayer`, injects the `GstSink` factory, maps `onStateChange`→status, forwards `play/pause/stop/next/previous` as controller commands. **Remaining before Phase 4:** (a) **live test against a running Music Assistant** — the only unproven hop is the WS handshake + codec negotiation; (b) register the service in a Luna bus / install the IPK so `service.register` actually binds; (c) `pactl` volume in `GstAudioProcessor.updateVolume`; (d) confirm MA's Sendspin path/port (`/sendspin`, default 8927) against a real instance.
 6. **Phase 4:** strip audio engine from `index.html`; add `config.html`; both subscribe to service `status` + send commands.
 7. **Phase 5:** `activitymanager` keep-alive + `bootd` registration driven by `bootOnStart`.
 8. **Phase 6:** package single IPK (app + `services/com.sendspin.cinema.service/`), `ares-install`, field test.
