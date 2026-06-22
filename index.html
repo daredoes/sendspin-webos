@@ -116,37 +116,52 @@
         #setup-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.98);
             z-index: 5000; display: none; flex-direction: column;
-            justify-content: center; align-items: center; backdrop-filter: blur(50px);
+            justify-content: flex-start; align-items: center; backdrop-filter: blur(50px);
+            overflow-y: auto; padding: 5vh 0 8vh;
         }
-        .setup-title { font-size: 1.6rem; color: var(--accent); text-transform: uppercase; letter-spacing: 4px; margin-bottom: 8px; }
-        .setup-heading { font-size: 2.8rem; font-weight: 700; margin: 0 0 36px; text-align: center; }
+        .setup-title { font-size: 1.4rem; color: var(--accent); text-transform: uppercase; letter-spacing: 4px; margin-bottom: 6px; }
+        .setup-heading { font-size: 2.2rem; font-weight: 700; margin: 0 0 18px; text-align: center; }
 
-        .form { display: flex; flex-direction: column; gap: 22px; width: 60vw; max-width: 900px; }
-        .field { display: flex; flex-direction: column; gap: 8px; }
-        .field-row { display: flex; gap: 22px; }
-        .field-row .field.host { flex: 3; }
-        .field-row .field.port { flex: 1; }
-        label { font-size: 1.3rem; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.55); }
+        #lan-hint {
+            width: 60vw; max-width: 900px; margin: 0 0 18px; padding: 16px 22px;
+            background: rgba(0,132,255,0.12); border: 1px solid rgba(0,132,255,0.35);
+            border-radius: 14px; font-size: 1.3rem; line-height: 1.5; color: rgba(255,255,255,0.85);
+        }
+        #lan-url { color: var(--accent); font-family: monospace; }
+
+        .form { display: flex; flex-direction: column; gap: 16px; width: 60vw; max-width: 900px; }
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 1.2rem; text-transform: uppercase; letter-spacing: 2px; color: rgba(255,255,255,0.55); }
         input {
             background: rgba(255,255,255,0.06); border: none;
             border-bottom: 3px solid var(--accent); color: #fff;
-            font-size: 2.4rem; text-align: left; width: 100%;
-            padding: 16px 18px; outline: none; font-family: monospace;
+            font-size: 2rem; text-align: left; width: 100%;
+            padding: 12px 16px; outline: none; font-family: monospace;
             transition: all 0.25s; box-sizing: border-box;
         }
         input:focus { background: rgba(255,255,255,0.12); border-bottom-color: #fff; }
         input::placeholder { color: #555; }
 
-        .actions { display: flex; gap: 24px; margin-top: 14px; }
+        .scan { width: 100%; }
+        #server-list { display: flex; flex-direction: column; gap: 10px; }
+        .srv-item {
+            padding: 14px 18px; background: rgba(255,255,255,0.06); border: 2px solid rgba(255,255,255,0.12);
+            border-radius: 12px; cursor: pointer; transition: 0.2s; font-size: 1.5rem;
+        }
+        .srv-item b { display: block; }
+        .srv-item span { color: rgba(255,255,255,0.5); font-size: 1.1rem; font-family: monospace; }
+        .srv-item:focus { border-color: #fff; background: rgba(0,132,255,0.25); transform: scale(1.02); outline: none; }
+
+        .actions { display: flex; gap: 24px; margin-top: 10px; }
         .action-btn {
-            flex: 1; padding: 20px; font-size: 1.6rem; text-transform: uppercase;
+            flex: 1; padding: 18px; font-size: 1.5rem; text-transform: uppercase;
             letter-spacing: 2px; border-radius: 14px; border: 2px solid rgba(255,255,255,0.15);
             background: var(--glass); color: #fff; cursor: pointer; transition: 0.25s;
         }
         .action-btn.primary { background: var(--accent); border-color: var(--accent); }
         .action-btn:focus { transform: scale(1.04); border-color: #fff; box-shadow: 0 0 40px var(--accent); outline: none; }
 
-        #setup-status { margin-top: 26px; min-height: 1.6rem; font-size: 1.5rem; letter-spacing: 1px; color: rgba(255,255,255,0.6); text-align: center; }
+        #setup-status { margin: 22px 0 0; min-height: 1.4rem; width: 60vw; max-width: 900px; font-size: 1.3rem; letter-spacing: 1px; color: rgba(255,255,255,0.45); text-align: center; }
         #setup-status.err { color: #e74c3c; }
         #setup-status.ok { color: #2ecc71; }
     </style>
@@ -162,26 +177,29 @@
     <div id="setup-overlay">
         <div class="setup-title">Music Assistant</div>
         <div class="setup-heading">Connect this TV player</div>
+
+        <div id="lan-hint">📱 Hard to type with the remote? Open
+            <b id="lan-url">the config page</b> in a browser on any computer or phone
+            on this network.</div>
+
         <div class="form">
-            <div class="field-row">
-                <div class="field host">
-                    <label for="input-host">Server URL or IP</label>
-                    <input type="text" id="input-host" placeholder="192.168.1.20 or http://ma.local">
-                </div>
-                <div class="field port">
-                    <label for="input-port">Port (optional)</label>
-                    <input type="text" id="input-port" inputmode="numeric" placeholder="8095">
-                </div>
+            <button class="action-btn scan" id="scan-btn" onclick="scanServers()">🔍 Scan for servers</button>
+            <div id="server-list"></div>
+            <div class="field">
+                <label for="input-host">Server URL or IP</label>
+                <input type="text" id="input-host" placeholder="192.168.1.20 or http://ma.local">
             </div>
-            <div class="field-row">
-                <div class="field" style="flex:1">
-                    <label for="input-user">Username (optional)</label>
-                    <input type="text" id="input-user" placeholder="leave blank if no auth">
-                </div>
-                <div class="field" style="flex:1">
-                    <label for="input-pass">Password (optional)</label>
-                    <input type="password" id="input-pass" placeholder="••••••">
-                </div>
+            <div class="field">
+                <label for="input-port">Port (optional)</label>
+                <input type="text" id="input-port" inputmode="numeric" placeholder="8095">
+            </div>
+            <div class="field">
+                <label for="input-user">Username (optional)</label>
+                <input type="text" id="input-user" placeholder="leave blank if no auth">
+            </div>
+            <div class="field">
+                <label for="input-pass">Password (optional)</label>
+                <input type="password" id="input-pass" placeholder="••••••">
             </div>
             <div class="field">
                 <label for="input-name">Player name</label>
@@ -192,7 +210,7 @@
                 <button class="action-btn" id="cancel-btn" onclick="closeSettings()" style="display:none">Cancel</button>
             </div>
         </div>
-        <div id="setup-status"></div>
+        <div id="setup-status">Use ↑ ↓ to move between fields, OK to edit/select.</div>
     </div>
 
     <div id="bg-overlay"></div>
@@ -343,6 +361,52 @@
             });
         };
 
+        // ----------------------------------------------------- mDNS server scan
+        // Ask the service to discover Music Assistant servers on the LAN and offer
+        // them as a pick-list so the IP never has to be typed on the remote.
+        window.scanServers = function () {
+            var list = document.getElementById('server-list');
+            var btn = document.getElementById('scan-btn');
+            btn.textContent = '🔍 Scanning…';
+            setupStatus.textContent = ''; setupStatus.className = '';
+            lunaCall('discover', { timeoutMs: 3000 }, function (res) {
+                btn.textContent = '🔍 Scan for servers';
+                list.innerHTML = '';
+                var servers = (res && res.servers) || [];
+                if (!servers.length) {
+                    setupStatus.textContent = 'No servers found — enter the address manually.';
+                    setupStatus.className = 'err';
+                    return;
+                }
+                servers.forEach(function (sv) {
+                    var el = document.createElement('div');
+                    el.className = 'srv-item';
+                    el.tabIndex = 0;
+                    el.innerHTML = '<b>' + (sv.name || 'Music Assistant') + '</b><span>' +
+                        (sv.url || '') + (sv.version ? (' · v' + sv.version) : '') + '</span>';
+                    el.onclick = function () { pickServer(sv); };
+                    list.appendChild(el);
+                });
+                setupStatus.textContent = servers.length + ' found — pick one (OK), or scroll down to type.';
+                setupStatus.className = 'ok';
+                refreshFocusRing();
+                servers.length && list.firstChild.focus();
+            });
+        };
+
+        function pickServer(sv) {
+            try {
+                var u = new URL(sv.url);
+                document.getElementById('input-host').value = u.protocol + '//' + u.hostname;
+                document.getElementById('input-port').value = u.port || '';
+            } catch (e) {
+                document.getElementById('input-host').value = sv.url || '';
+            }
+            setupStatus.textContent = 'Selected ' + (sv.name || sv.url) + ' — press Save.';
+            setupStatus.className = 'ok';
+            document.getElementById('save-btn').focus();
+        }
+
         // Push the persisted config to the service: name first, then server+creds.
         function applyConfig(done) {
             var c = loadCfg();
@@ -388,6 +452,10 @@
 
         function renderStatus(st) {
             if (!st) { return; }
+            if (st.configUrl) {
+                var lu = document.getElementById('lan-url');
+                if (lu) { lu.textContent = st.configUrl; }
+            }
             var meta = CONN[st.status] || CONN.idle;
             connPill.className = (st.connected ? 'ok' : meta.cls);
             connText.textContent = st.error ? ('Error: ' + st.error).slice(0, 60)
@@ -431,6 +499,29 @@
             });
         }
 
+        // ----------------------------------------------- remote (D-pad) focus nav
+        // webOS WAM does no automatic spatial navigation, and arrow keys inside a
+        // text field only move the caret — so without this you can't move between
+        // fields with the remote. Up/Down walk a live list of the overlay's
+        // focusable controls; Enter activates a scanned-server tile (a div).
+        function focusables() {
+            if (setupOverlay.style.display !== 'flex') { return []; }
+            var nodes = setupOverlay.querySelectorAll('button, input, .srv-item');
+            var out = [];
+            for (var i = 0; i < nodes.length; i++) {
+                if (nodes[i].offsetParent !== null && !nodes[i].disabled) { out.push(nodes[i]); }
+            }
+            return out;
+        }
+        function refreshFocusRing() { /* focusables() is computed live; nothing to cache */ }
+        function moveFocus(dir) {
+            var els = focusables();
+            if (!els.length) { return; }
+            var i = els.indexOf(document.activeElement);
+            if (i === -1) { els[0].focus(); return; }
+            els[Math.max(0, Math.min(els.length - 1, i + dir))].focus();
+        }
+
         // ----------------------------------------------------------------- chrome
         function showUI() {
             document.getElementById('main-body').classList.add('show-ui');
@@ -442,10 +533,16 @@
         window.addEventListener('mousemove', showUI);
         window.addEventListener('keydown', function (e) {
             showUI();
-            if ((e.key === 'Backspace' || e.key === 'Escape' || e.key === 'GoBack') &&
-                setupOverlay.style.display === 'flex' && hasCfg()) {
-                e.preventDefault();
-                closeSettings();
+            if (setupOverlay.style.display !== 'flex') { return; }
+            var k = e.key, kc = e.keyCode;
+            if (k === 'ArrowDown' || kc === 40) { e.preventDefault(); moveFocus(1); return; }
+            if (k === 'ArrowUp' || kc === 38) { e.preventDefault(); moveFocus(-1); return; }
+            if ((k === 'Enter' || kc === 13) &&
+                document.activeElement && document.activeElement.classList.contains('srv-item')) {
+                e.preventDefault(); document.activeElement.click(); return;
+            }
+            if (k === 'Backspace' || k === 'Escape' || k === 'GoBack' || kc === 461 || kc === 27) {
+                if (hasCfg()) { e.preventDefault(); closeSettings(); }
             }
         });
 
