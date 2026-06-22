@@ -285,6 +285,9 @@
         var setupStatus = document.getElementById('setup-status');
 
         var uiTimeout, isPlaying = false, statusBridge = null, lastArt = null;
+        var lastStatus = null;       // most recent service snapshot (source of truth)
+        var autoOpened = false;      // true when setup was opened because nothing is configured
+        var decidedInitial = false;  // have we made the first show-setup-or-not decision?
 
         // ---------------------------------------------------------------- config
         // The service loses in-memory config when webOS idle-recycles it, so the
@@ -313,21 +316,30 @@
             return host;
         }
 
-        window.openSettings = function () {
+        window.openSettings = function (auto) {
+            autoOpened = !!auto;
             var c = loadCfg();
+            // If this TV has no local config but the service is already configured
+            // (e.g. set from the LAN page), prefill from the service snapshot.
+            if (!hasCfg() && lastStatus && lastStatus.server) {
+                c.host = lastStatus.server;
+                c.user = lastStatus.username || '';
+                c.name = lastStatus.playerName || c.name;
+            }
             document.getElementById('input-host').value = c.host;
             document.getElementById('input-port').value = c.port;
             document.getElementById('input-user').value = c.user;
             document.getElementById('input-pass').value = c.pass;
             document.getElementById('input-name').value = c.name;
-            document.getElementById('cancel-btn').style.display = hasCfg() ? 'block' : 'none';
+            var configured = hasCfg() || !!(lastStatus && lastStatus.server);
+            document.getElementById('cancel-btn').style.display = configured ? 'block' : 'none';
             setupStatus.textContent = '';
             setupStatus.className = '';
             setupOverlay.style.display = 'flex';
             document.getElementById('input-host').focus();
         };
 
-        window.closeSettings = function () { setupOverlay.style.display = 'none'; };
+        window.closeSettings = function () { setupOverlay.style.display = 'none'; autoOpened = false; };
 
         window.saveSetup = function () {
             var host = document.getElementById('input-host').value.trim();
@@ -450,16 +462,34 @@
             error:      { cls: 'err',  text: 'Error' }
         };
 
+        function serverHost(server) {
+            if (!server) { return ''; }
+            try { return new URL(server.indexOf('://') >= 0 ? server : 'http://' + server).host; }
+            catch (e) { return server; }
+        }
+
         function renderStatus(st) {
             if (!st) { return; }
+            lastStatus = st;
             if (st.configUrl) {
                 var lu = document.getElementById('lan-url');
                 if (lu) { lu.textContent = st.configUrl; }
             }
+
+            // If the setup overlay was auto-shown because nothing was configured and
+            // the service is now configured (e.g. set from the LAN page), dismiss it
+            // so it stops covering the playing content.
+            if (autoOpened && st.server && setupOverlay.style.display === 'flex') {
+                closeSettings();
+            }
+
+            var host = serverHost(st.server);
             var meta = CONN[st.status] || CONN.idle;
             connPill.className = (st.connected ? 'ok' : meta.cls);
             connText.textContent = st.error ? ('Error: ' + st.error).slice(0, 60)
-                                 : (st.connected ? 'Connected' : meta.text);
+                                 : st.connected ? ('Connected · ' + host)
+                                 : host ? (meta.text + ' · ' + host)
+                                 : meta.text;
 
             var t = st.track || {};
             titleEl.textContent = t.title || 'Ready';
@@ -495,7 +525,15 @@
         // ------------------------------------------------------------ status sub
         function subscribeStatus() {
             statusBridge = lunaCall('status', { subscribe: true }, function (res) {
-                if (res && res.state) { renderStatus(res.state); }
+                if (res && res.state) {
+                    renderStatus(res.state);
+                    // First snapshot decides whether to show setup: only if nothing is
+                    // configured here OR on the service (so a LAN-page setup is honored).
+                    if (!decidedInitial) {
+                        decidedInitial = true;
+                        if (!hasCfg() && !res.state.server) { openSettings(true); }
+                    }
+                }
             });
         }
 
@@ -555,9 +593,16 @@
             subscribeStatus();
             if (hasCfg()) {
                 applyConfig(); // re-push saved config so a recycled service reconnects
-            } else {
-                openSettings();
             }
+            // Whether to show setup is decided when the first status arrives (so a
+            // config set from the LAN page is honored). Fallback: if no status comes
+            // back at all (e.g. no Luna bridge) and nothing is saved, show setup.
+            setTimeout(function () {
+                if (!decidedInitial) {
+                    decidedInitial = true;
+                    if (!hasCfg()) { openSettings(true); }
+                }
+            }, 2500);
         })();
     </script>
 </body>
