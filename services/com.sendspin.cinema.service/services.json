@@ -12,6 +12,7 @@
         "next": "public",
         "previous": "public",
         "disconnect": "public",
+        "discover": "public",
         "setServer": "public",
         "setPlayerName": "public",
         "setBootOnStart": "public",

@@ -23,9 +23,26 @@ var core = require('./sendspin-core');
 var SendspinPlayer = core.SendspinPlayer;
 var GstSink = require('./gst-sink').GstSink;
 var maLogin = require('./ma-login');
+var mdns = require('./mdns-discover');
+var configHttp = require('./config-http');
+var os = require('os');
 
 var SERVICE_ID = 'com.sendspin.cinema.service';
 var service = new Service(SERVICE_ID);
+
+var CONFIG_HTTP_PORT = 3917; // LAN config web UI (browse http://<tv-ip>:3917)
+
+// First non-internal IPv4 address, so the UI can show "configure from your computer".
+function lanIp() {
+  var ifaces = os.networkInterfaces();
+  for (var name in ifaces) {
+    var addrs = ifaces[name] || [];
+    for (var i = 0; i < addrs.length; i++) {
+      if (addrs[i].family === 'IPv4' && !addrs[i].internal) { return addrs[i].address; }
+    }
+  }
+  return null;
+}
 
 /* Opt-in file log: webOS discards a JS service's stdout, so this is the only way
  * to see lifecycle events on-device. Off by default (zero cost); enable for
@@ -94,7 +111,8 @@ function snapshot() {
     bootOnStart: state.bootOnStart,
     track: state.track,
     error: state.error,
-    connected: !!(player && player.isConnected)
+    connected: !!(player && player.isConnected),
+    configUrl: lanIp() ? ('http://' + lanIp() + ':' + CONFIG_HTTP_PORT) : null
   };
 }
 
@@ -189,7 +207,7 @@ function startPlayer(baseUrl, authToken, gen) {
 function connect() {
   var gen = ++connectGen;
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
-  if (!state.server) { stopKeepAlive(); setStatus('idle'); return; }
+  if (!state.server) { setStatus('idle'); return; } // keep-alive stays (LAN config server)
   var baseUrl;
   try { baseUrl = buildBaseUrl(state.server); }
   catch (e) { setStatus('error', 'bad server "' + state.server + '": ' + e); return; }
@@ -215,16 +233,31 @@ function forward(command) {
   catch (e) { return { ok: false, reason: String(e) }; }
 }
 
-/* --------------------------------------------------------------- Luna API */
-
-service.register('setServer', function (msg) {
-  var p = msg.payload || {};
-  dbg('setServer called server=' + p.server);
+/* Shared config entry point used by both the Luna API (setServer) and the LAN
+ * config web server (POST /api/config). Sets server/creds/name and (re)connects. */
+function applyConfig(p) {
+  p = p || {};
+  dbg('applyConfig server=' + p.server);
+  if (p.playerName) { state.playerName = p.playerName; }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
   if (p.password !== undefined) { state.password = p.password || null; }
   connect();
-  msg.respond({ returnValue: true, state: snapshot() });
+  return snapshot();
+}
+
+/* --------------------------------------------------------------- Luna API */
+
+service.register('setServer', function (msg) {
+  var state2 = applyConfig(msg.payload || {});
+  msg.respond({ returnValue: true, state: state2 });
+});
+
+service.register('discover', function (msg) {
+  var timeout = (msg.payload && msg.payload.timeoutMs) || 3000;
+  mdns.discover(timeout, function (err, servers) {
+    msg.respond({ returnValue: !err, error: err ? String(err.message || err) : null, servers: servers || [] });
+  });
 });
 
 service.register('setPlayerName', function (msg) {
@@ -269,8 +302,7 @@ service.register('previous', function (msg) {
 service.register('disconnect', function (msg) {
   state.server = null;
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
-  stopKeepAlive();                       // allow the service to idle-exit again
-  setStatus('idle');
+  setStatus('idle');                     // keep-alive stays so the LAN config UI lives on
   msg.respond({ returnValue: true, state: snapshot() });
 });
 
@@ -278,5 +310,18 @@ service.register('status', function (msg) {
   if (msg.isSubscription) { statusSubscribers.push(msg); }
   msg.respond({ returnValue: true, subscribed: !!msg.isSubscription, state: snapshot() });
 });
+
+/* ----------------------------------------------------- LAN config web server */
+/* Serve the config page (and /api/discover + /api/config) to any device on the
+ * LAN, so the player can be set up from a computer/phone keyboard. Holding the
+ * keep-alive while it runs keeps the service (and the page, and any MA connection)
+ * resident after the app has been opened once — until the TV reboots or a bootd
+ * autostart (Phase 5b) makes it always-on. */
+configHttp.start(CONFIG_HTTP_PORT, {
+  snapshot: snapshot,
+  discover: function (cb) { mdns.discover(3000, cb); }, // config-http calls discover(cb)
+  applyConfig: applyConfig
+});
+startKeepAlive();
 
 console.log('Sendspin Cinema service ready:', SERVICE_ID);

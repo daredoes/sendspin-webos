@@ -40,6 +40,8 @@ cp "$SVC/package.json" \
    "$SVC/node-env.js" \
    "$SVC/gst-sink.js" \
    "$SVC/ma-login.js" \
+   "$SVC/mdns-discover.js" \
+   "$SVC/config-http.js" \
    "$STAGE/service/"
 cp -R "$SVC/node_modules/ws" "$STAGE/service/node_modules/"
 
