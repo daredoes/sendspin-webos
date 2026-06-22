@@ -10,8 +10,10 @@
 # GOTCHAS BAKED IN (learned the hard way — don't re-derive these):
 #   - luna-send -i streams its install status ONLY over a real PTY. Without
 #     `ssh -tt` the call returns EXIT=0 but installs NOTHING and prints nothing.
-#   - The TV's busybox `timeout` uses `-t SECONDS` (GNU `timeout 25 cmd` errors
-#     with "can't execute '25'").
+#   - The TV's busybox `timeout` syntax VARIES by firmware: older builds want
+#     `timeout -t SECONDS` (GNU `timeout 25 cmd` errors with "can't execute '25'"),
+#     newer builds (busybox >=1.30) want GNU `timeout SECONDS` and reject `-t`.
+#     We probe with `timeout 1 true` and pick the right form per TV.
 #   - dev/install reads the ipk from the TV's filesystem, so scp it to
 #     /media/developer first; ipkUrl must be that on-device path.
 #   - busybox `ls` has no --time-style/--full-time-friendly flags worth relying
@@ -53,10 +55,12 @@ echo "[deploy] scp -> $HOST:$REMOTE_IPK"
 ssh_scp "$IPK" "$REMOTE_IPK" >/dev/null
 
 # 3. Install via the dev Luna service. ssh -tt is mandatory (see header).
+#    Probe the TV's busybox timeout syntax (varies by firmware) and use it.
 echo "[deploy] installing $APP_ID (streaming status)…"
-OUT="$(ssh_tty "timeout -t 90 luna-send -i -f \
-  luna://com.webos.appInstallService/dev/install \
-  '{\"id\":\"$APP_ID\",\"ipkUrl\":\"$REMOTE_IPK\",\"subscribe\":true}'" 2>&1 | tr -d '\r')"
+INSTALL_CMD="if timeout 1 true 2>/dev/null; then TO='timeout 90'; else TO='timeout -t 90'; fi; \
+\$TO luna-send -i -f luna://com.webos.appInstallService/dev/install \
+'{\"id\":\"$APP_ID\",\"ipkUrl\":\"$REMOTE_IPK\",\"subscribe\":true}'"
+OUT="$(ssh_tty "$INSTALL_CMD" 2>&1 | tr -d '\r')"
 
 # Show only the meaningful state transitions, not every byte of the stream.
 echo "$OUT" | grep -o '"state": "[^"]*"' | awk '!seen[$0]++ { print "   • " $0 }'
