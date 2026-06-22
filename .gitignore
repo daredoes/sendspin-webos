@@ -1,1 +1,3 @@
 *.ipk
+.ipk-stage/
+dist/

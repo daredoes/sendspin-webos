@@ -29,10 +29,80 @@ flowchart LR
 ```
 
 - ✅ **Phase 2 — COMPLETE on hardware (2026-06-21).** Production sink `node → gst-launch stdin (fdsrc) → pulsesink` validated for both MVP codecs, AND `sendspin-core.js` (extracted protocol/time-sync/state/player, Web-Audio decode dropped) **runs on the TV's node 8.12** and drives the full real-audio path end-to-end: 31 protocol-framed FLAC chunks → `GstAudioProcessor` → `GstSink` → `pulsesink`, clean EOS. See "Phase 2 — core VERDICT" below.
-- 🟨 **Phase 3 — JS service with real protocol wiring (2026-06-21).** `services/com.sendspin.cinema.service/` connects via `SendspinPlayer`, feeds chunks to `GstSink`, exposes Luna methods. Loads + audio path proven on node 8; **only the live MA WebSocket round-trip is untested (needs a running Music Assistant).**
+- ✅ **Phase 3 — JS service packaged, installed, REGISTERED, and live MA round-trip PROVEN (2026-06-21).** Single IPK (`package-ipk.sh`) installs app + service; the service registers on the Luna bus (`luna://com.sendspin.cinema.service/status` returns live state) and completes the full authenticated Sendspin handshake against MA 2.8.3. See "Phase 3 — VERDICT" below. **Remaining:** keep-alive so it doesn't idle out (Phase 5), config UI (Phase 4), and actually routing a queue to the player to hear audio.
 - ✅ **Phase 1 — PASSED on real hardware (2026-06-20).** Background audio mixes with a live input. See "Phase 1 — VERDICT" below.
 - ✅ **Phase 0 — COMPLETED on real hardware (2026-06-20).** Decode feasibility answered, and it **changed the decode strategy**: the on-device node is too old for the WASM decoders, but on-device **gstreamer** decodes FLAC to mixable PCM and plays it through `pulsesink`. Opus is the one open codec risk. See "Phase 0 — VERDICT" below.
 - ⬜ Phases 2–6 not started.
+
+---
+
+## Phase 3 — VERDICT: ✅ packaged, registered, live MA handshake proven (2026-06-21)
+
+### Single IPK with app + background service — `package-ipk.sh`
+`ares-package -n APP_DIR SERVICE_DIR` (the `-n`/no-minify is required: the app ships
+`sendspin-lib.js` as a raw ES module and ares' bundled terser aborts on `import/export`).
+The script stages clean `app/` and `service/` trees (no build/test/docs/node leakage),
+ensures the service is built (`build.sh`), and bundles `node_modules/ws`. Output:
+`dist/com.sendspin.cinema_<ver>_all.ipk` (~1 MB). `ares-package -i` confirms
+`services: ["com.sendspin.cinema.service"]`.
+
+### Installed + registered on the rooted TV
+Copied the IPK over SSH and installed via the homebrew dev path:
+`luna-send -n 1 luna://com.webos.appInstallService/dev/install '{"id":"com.sendspin.cinema","ipkUrl":"/tmp/sendspin.ipk","subscribe":true}'`.
+Lands at `/media/developer/apps/usr/palm/{applications/com.sendspin.cinema, services/com.sendspin.cinema.service}` (with bundled `ws`). Calling
+`luna://com.sendspin.cinema.service/status` **returns our real `snapshot()`** — first call ~2.8 s
+(node cold-start loading core+ws), then ~4 ms. **The service is live on the Luna bus.**
+
+### ⚑ MA 2.8 requires WebSocket AUTH before the Sendspin protocol — SOLVED
+The single remaining unknown turned out to be auth. MA ≥2.8 fronts `/sendspin` with a proxy
+(`controllers/webserver/sendspin_proxy.py`) that **closes the socket with `code 4001
+"First message must be auth"`** unless the client's first frame is:
+```json
+{"type":"auth","token":"<MA access token>","client_id":"<player id>"}
+```
+…to which it replies `{"type":"auth_ok"}` and then transparently proxies the normal protocol
+(`client/hello` → `server/hello` → …). The bundled `sendspin-lib.js` predates this and sent
+`client/hello` first → 4001. **Get the token** via the main API WS: connect `ws://host:8095/ws`,
+wait for the `server_id` info frame, send
+`{"command":"auth/login","message_id":"…","args":{"username","password"}}`, read
+`result.access_token` (a ~30-day JWT). NOTE: this MA serves both `/ws` and `/sendspin` on the
+**webserver port 8095**, not the old dedicated `8927`.
+
+**Proven on-device, end-to-end** (`live-auth-test.js` on the TV → the LAN MA server,
+credentials supplied at runtime): login → token → `/sendspin` → auth → **`auth_ok`** → `client/hello` →
+**`server/hello`** → `server/state` + `group/update` flowing → clean close. (No audio yet:
+`stream/start` never arrived because nothing was queued to this player; the player does now
+register/auto-whitelist in MA as "Sendspin Cinema".)
+
+### ⚑ Open: the managed service's connection doesn't persist (→ Phase 5 keep-alive)
+Driving the **installed service** over Luna (`setServer {server,username,password}` + a held
+`status` subscription) reaches **`status:"paused"`** with `track` populated — i.e. it logs in,
+authenticates, and receives MA `server/state`/`group/update` — but every snapshot reports
+`connected:false`, whereas the **identical code run as a plain `node` process holds
+`isConnected:true` for 12 s+** (`svc-path-test.js`). Same bundle, same `node-env`, same MA. The
+delta is the webOS background-service lifecycle: the managed JS service is suspended/throttled when
+not actively servicing a Luna call, so the persistent WebSocket can't be maintained. This is exactly
+what **Phase 5** fixes (register a `com.webos.service.activitymanager` activity to keep the service
+resident with a live event loop; `bootd` for auto-start). Until then auth + protocol are proven;
+connection *persistence* is the remaining gap before audio can flow.
+
+### Auth baked into core + service (rebuilt + reinstalled + verified 2026-06-21)
+- `build-core.mjs` now injects an **auth preamble** into `SendspinPlayer.connect`: on ws open it
+  sends the `{type:auth,token}` frame and gates `client/hello` behind `auth_ok` via an instance
+  `_authed` flag (reset each open so reconnects re-auth). Two exact-string anchor replacements,
+  asserted.
+- `ma-login.js`: `getToken(hostPort, user, pass, cb)` — the `/ws` `auth/login` exchange above.
+- `service.js`: `setServer` now accepts `{server, username, password}`; `connect()` fetches a
+  token first (when a username is set) then constructs `SendspinPlayer({authToken})`. `snapshot()`
+  echoes `username` but never the password. Default port → 8095.
+- ✅ Rebuilt (`build-core.mjs` → esbuild, `auth_ok` present, 0 optional-chaining), repackaged
+  (`package-ipk.sh`, now also bundles `ma-login.js`), reinstalled. Verified via the installed code:
+  `svc-path-test.js` does `ma-login` → `SendspinPlayer({authToken})` → `auth ok` → `Connected to
+  server` → `isConnected=true`. Through the managed Luna service it logs in + authenticates
+  (`status:"paused"`) but does not stay connected — see the keep-alive note above.
+- **TODO:** Phase 5 keep-alive (the persistence blocker above); token refresh on expiry (reconnect
+  reuses the captured ~30-day JWT); credential persistence across service idle-out (state resets to
+  defaults when webOS recycles the service).
 
 ---
 

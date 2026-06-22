@@ -22,17 +22,20 @@ var Service = require('webos-service');
 var core = require('./sendspin-core');
 var SendspinPlayer = core.SendspinPlayer;
 var GstSink = require('./gst-sink').GstSink;
+var maLogin = require('./ma-login');
 
 var SERVICE_ID = 'com.sendspin.cinema.service';
 var service = new Service(SERVICE_ID);
 
-var MA_SENDSPIN_PORT = 8927; // Music Assistant Sendspin player default port
+var MA_SENDSPIN_PORT = 8095; // Music Assistant webserver port (serves /ws + /sendspin)
 
 /* ------------------------------------------------------------------ state */
 
 var state = {
   status: 'idle',          // idle | connecting | buffering | playing | paused | error
   server: null,            // Music Assistant host (ip or host[:port])
+  username: null,          // MA login (required when the server has auth enabled)
+  password: null,
   playerName: 'Sendspin Cinema',
   bootOnStart: true,
   track: null,             // { title, artist, artwork } when known
@@ -46,6 +49,7 @@ function snapshot() {
   return {
     status: state.status,
     server: state.server,
+    username: state.username,        // password is never echoed back
     playerName: state.playerName,
     bootOnStart: state.bootOnStart,
     track: state.track,
@@ -111,25 +115,40 @@ function onCoreState(s) {
   pushStatus();
 }
 
+function startPlayer(baseUrl, authToken) {
+  var safeId = 'webos-' + state.playerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  player = new SendspinPlayer({
+    playerId: safeId,
+    clientName: state.playerName,
+    baseUrl: baseUrl,
+    authToken: authToken,               // null when MA has no auth; else MA access token
+    codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
+    storage: null,
+    createSink: makeSink,
+    onStateChange: onCoreState
+  });
+  player.connect().catch(function (e) { setStatus('error', 'connect ' + baseUrl + ': ' + e); });
+}
+
 function connect() {
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
   if (!state.server) { setStatus('idle'); return; }
   var baseUrl;
   try { baseUrl = buildBaseUrl(state.server); }
   catch (e) { setStatus('error', 'bad server "' + state.server + '": ' + e); return; }
-
-  var safeId = 'webos-' + state.playerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  player = new SendspinPlayer({
-    playerId: safeId,
-    clientName: state.playerName,
-    baseUrl: baseUrl,
-    codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
-    storage: null,
-    createSink: makeSink,
-    onStateChange: onCoreState
-  });
   setStatus('connecting');
-  player.connect().catch(function (e) { setStatus('error', 'connect ' + baseUrl + ': ' + e); });
+
+  if (state.username) {
+    // MA has auth: exchange username/password for an access token, then connect.
+    var hostPort = new URL(baseUrl).host;
+    maLogin.getToken(hostPort, state.username, state.password, function (err, token) {
+      if (err) { setStatus('error', 'login: ' + (err.message || err)); return; }
+      if (!state.server) { return; } // disconnected while logging in
+      startPlayer(baseUrl, token);
+    });
+  } else {
+    startPlayer(baseUrl, null);
+  }
 }
 
 function forward(command) {
@@ -141,7 +160,10 @@ function forward(command) {
 /* --------------------------------------------------------------- Luna API */
 
 service.register('setServer', function (msg) {
-  state.server = (msg.payload && msg.payload.server) || null;
+  var p = msg.payload || {};
+  state.server = p.server || null;
+  if (p.username !== undefined) { state.username = p.username || null; }
+  if (p.password !== undefined) { state.password = p.password || null; }
   connect();
   msg.respond({ returnValue: true, state: snapshot() });
 });

@@ -1054,11 +1054,35 @@ var SendspinPlayer = class {
       this.wsUrl,
       // onOpen
       () => {
-        console.log("Sendspin: Using player_id:", this.config.playerId);
-        this.protocolHandler.sendClientHello();
+        this._authed = false;
+        if (this.config.authToken) {
+          console.log("Sendspin: authenticating player_id:", this.config.playerId);
+          this.wsManager.send({ type: "auth", token: this.config.authToken, client_id: this.config.playerId });
+        } else {
+          this._authed = true;
+          console.log("Sendspin: Using player_id:", this.config.playerId);
+          this.protocolHandler.sendClientHello();
+        }
       },
       // onMessage
       (event) => {
+        if (!this._authed) {
+          if (typeof event.data === "string") {
+            let m = null;
+            try {
+              m = JSON.parse(event.data);
+            } catch (e) {
+            }
+            if (m && m.type === "auth_ok") {
+              this._authed = true;
+              console.log("Sendspin: auth ok; Using player_id:", this.config.playerId);
+              this.protocolHandler.sendClientHello();
+            } else {
+              console.warn("Sendspin: unexpected pre-auth message", event.data);
+            }
+          }
+          return;
+        }
         this.protocolHandler.handleMessage(event);
       },
       // onError
