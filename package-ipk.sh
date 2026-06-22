@@ -21,10 +21,12 @@ fi
 rm -rf "$STAGE"
 mkdir -p "$STAGE/app" "$STAGE/service/node_modules" "$DIST"
 
-# 2. Stage the app — only the runtime files appinfo.json points at.
+# 2. Stage the app — only the runtime files appinfo.json points at. The UI is now
+#    a thin Luna client of the background service (it no longer imports
+#    sendspin-lib.js in the browser), so that 24k-line bundle is not shipped with
+#    the app; build-core.mjs still derives the service core from it at the repo root.
 cp "$ROOT/appinfo.json" \
    "$ROOT/index.html" \
-   "$ROOT/sendspin-lib.js" \
    "$ROOT/Vibrant.min.js" \
    "$ROOT/icon.png" \
    "$STAGE/app/"
@@ -45,8 +47,8 @@ cp -R "$SVC/node_modules/ws" "$STAGE/service/node_modules/"
 echo "[pkg] validating staged app + service"
 ares-package --check "$STAGE/app" "$STAGE/service"
 echo "[pkg] packaging -> $DIST"
-# -n/--no-minify: the app ships sendspin-lib.js as a native ES module; terser
-# (ares' bundled minifier) can't parse ESM import/export and aborts the build.
+# -n/--no-minify: keep the app's JS verbatim (ares' bundled terser has aborted on
+# this tree before); the package is small and minification buys little here.
 ares-package -n "$STAGE/app" "$STAGE/service" -o "$DIST"
 
 echo "[pkg] done:"

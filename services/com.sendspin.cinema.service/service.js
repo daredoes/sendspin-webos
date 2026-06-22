@@ -146,7 +146,9 @@ function onCoreState(s) {
     state.track = {
       title: m.title || null,
       artist: m.artist || null,
-      artwork: m.artwork_url || m.art || m.image || null
+      artwork: m.artwork_url || m.art || m.image || null,
+      duration: (m.progress && m.progress.track_duration) || null,
+      position: (m.progress && m.progress.track_progress) || null
     };
   }
   if (s.groupState && s.groupState.playback_state) {

@@ -51,6 +51,7 @@ var GstAudioProcessor = class {
       this.sink = null;
     }
     this.sink = this.createSink(format);
+    this.updateVolume();
   }
   // No-ops: there is no AudioContext to resume and no <audio> element to drive.
   resumeAudioContext() {
@@ -80,9 +81,17 @@ var GstAudioProcessor = class {
       this.sink.write(Buffer.from(bytes.buffer, bytes.byteOffset + 9, bytes.length - 9));
     }
   }
-  // Volume/mute are applied downstream (pulsesink / pactl) — MVP no-op so the
-  // server's volume commands are accepted without error. TODO: pactl set-sink-input-volume.
+  // Music Assistant volume/mute commands land here. Apply them to OUR pulse
+  // sink-input only (gst-sink uses `pactl set-sink-input-volume`), so the stream
+  // volume changes while the TV's own/master volume is left alone. stateManager
+  // holds the 0..100 volume + muted flag set by the protocol before this call.
   updateVolume() {
+    if (!this.sink || typeof this.sink.setVolume !== "function") {
+      return;
+    }
+    const vol = this.stateManager ? this.stateManager.volume : 100;
+    const muted = this.stateManager ? this.stateManager.muted : false;
+    this.sink.setVolume(vol, muted);
   }
   setSyncDelay(delayMs) {
     const d = Math.round(delayMs);

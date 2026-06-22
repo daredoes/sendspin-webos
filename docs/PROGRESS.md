@@ -28,6 +28,11 @@ flowchart LR
     style P6 fill:#1a2a4a,color:#fff
 ```
 
+- 🎉 **END-TO-END AUDIO PLAYING ON THE TV (2026-06-21).** Triggered MA `player_queues/play_media`
+  to the live `webos-sendspin-cinema` player → service went `status:"playing"`, `connected:true`,
+  `onCoreState pb=playing`, and **audio came out of the TV mixed with the live picture** (confirmed by
+  the user). The full chain works: `MA play_media → server/state + stream/start (FLAC) →
+  GstAudioProcessor → GstSink → gst-launch → pulsesink (mixes w/ HDMI)`. See "End-to-end audio" below.
 - ✅ **Phase 5 (keep-alive) — DONE on hardware (2026-06-21).** The installed service now stays
   resident (keep-alive activity) and holds a single, stable, authenticated WebSocket to MA —
   `connected:true` sustained 60 s+ with no client poking it. Root causes (idle-exit + duplicate
@@ -38,6 +43,97 @@ flowchart LR
 - ✅ **Phase 1 — PASSED on real hardware (2026-06-20).** Background audio mixes with a live input. See "Phase 1 — VERDICT" below.
 - ✅ **Phase 0 — COMPLETED on real hardware (2026-06-20).** Decode feasibility answered, and it **changed the decode strategy**: the on-device node is too old for the WASM decoders, but on-device **gstreamer** decodes FLAC to mixable PCM and plays it through `pulsesink`. Opus is the one open codec risk. See "Phase 0 — VERDICT" below.
 - ⬜ Remaining: Phase 4 (UIs as Luna clients), Phase 5b (`bootd` boot toggle), Phase 6 (field test).
+
+---
+
+## 2026-06-21 (later) — stream-only volume + config UI as a Luna client
+
+Two user-facing fixes, both built + installed + verified on `root@192.168.1.32`.
+
+### 1. Music Assistant volume now adjusts ONLY the Sendspin stream (not the TV)
+
+MA's volume/mute commands were a no-op (`GstAudioProcessor.updateVolume`), so "the
+audio controls don't work." They must change *our stream*, never the television's
+own/master volume. On this LG webOS build the obvious per-stream knobs are all
+unusable (verified on-device):
+
+- `pactl set-sink-input-volume` — **broken**: garbles the channel volume struct
+  ("tried to set volumes for N channels, whereas channel/s supported = 1/2"),
+  whatever the value form (`50%`, `0.5`, raw). Query path works; set path doesn't.
+- `pacmd` — **no socket** ("No PulseAudio daemon running, or not running as session
+  daemon").
+- `pulsesink volume=` — **overridden** by module-stream-restore (sink-input stays
+  100%).
+
+Solution: scale the decoded PCM with an in-pipeline **gstreamer `volume` element**
+(`… ! audioconvert ! volume volume=<gain> ! audioresample ! pulsesink …`). This is
+independent of PulseAudio's volume DB and, by construction, only attenuates our
+samples — the TV/HDMI path (mixed downstream in hardware, Phase 1) and the master
+sink are untouched. `flat-volumes = no` on this box, so even the master sink
+wouldn't move. gst-launch can't change an element prop at runtime, so a volume
+change **respawns the pipeline at the new gain, debounced 300 ms** (a slider drag
+collapses to one respawn; flacparse/rawaudioparse resync after the brief gap).
+Mute = gain 0. Code: `gst-sink.js` (`setVolume`/`_spawn`/`_respawn`),
+`GstAudioProcessor.updateVolume` reads `stateManager.volume`/`.muted`.
+
+**Proven on-device:** feeding a real FLAC into the *installed* `gst-sink.js`,
+`setVolume(50)` → respawn at `volume volume=0.500`, `setVolume(0,muted)` → `0.000`;
+the master `pcm_output` stayed `100%` throughout.
+
+### 2. Config UI is now a thin Luna client (server URL + port + credentials)
+
+`index.html` previously ran its **own** in-browser `SendspinPlayer` (direct to MA
+`:8927`, Web-Audio — suspends in background) and only stored an IP + name in
+`localStorage`; it never told the *service* anything, so MA was controlling the
+service player whose volume was the no-op above. Rewrote it as a thin client of
+`com.sendspin.cinema.service` (decision: "drive the service via Luna"):
+
+- Setup form: **server URL/IP, optional port, username, password, player name**.
+  Builds the `server` string the service parses (`host` / `host:port` / `http://…`)
+  and calls `setPlayerName` + `setServer {server, username, password}`.
+- Subscribes to `status` for now-playing (title/artist/artwork/progress) + a
+  connection pill; transport buttons call `play/pause/next/previous` over Luna.
+- Luna bridge via `PalmServiceBridge`/`webOSServiceBridge`. No `sendspin-lib.js` in
+  the browser anymore (dropped from the app package → IPK 1.05 MB → 877 KB).
+- Added `next`/`previous`/`disconnect` to `services.json` (UI calls them).
+- Service now also surfaces `track.duration`/`track.position` in `snapshot()`.
+
+**Verified:** service registers on the Luna bus (`status` returns the live
+snapshot the UI subscribes to); `setServer`/`setPlayerName` round-trip.
+
+### Still open (not in this pass)
+- **Live end-to-end with real MA creds** (UI `setServer` → connect → MA volume
+  slider → audible attenuation). Individual hops proven; needs an MA login to retest
+  the whole chain. The auth handshake itself was already proven in Phase 3/5.
+- **Credential persistence** across the service's idle-exit / TV boot — state resets
+  to defaults when webOS recycles the service; the UI re-pushes config on every
+  launch, but a headless boot (Phase 5b `bootd`) has no creds until the app opens.
+- Quick-connect auth — deferred (user/pass only this pass).
+
+---
+
+## End-to-end audio — ✅ heard on the TV (2026-06-21)
+
+The complete pipeline is proven on real hardware, audio confirmed by ear:
+
+```
+MA player_queues/play_media  →  server/state pb=playing + stream/start (FLAC)
+  →  GstAudioProcessor (strips chunk header, forwards encoded payload)
+  →  GstSink → gst-launch-1.0 fdsrc ! flacparse ! avdec_flac ! … ! pulsesink
+  →  speakers, mixed with the live TV/HDMI picture
+```
+
+**How playback was triggered** (the player connects on its own; MA must route a queue to it):
+1. Service connected as player `webos-sendspin-cinema` (provider `sendspin`, available=true) — visible
+   via the MA API `players/all`.
+2. The MA **API WebSocket** (`ws://host:8095/ws`) needs session auth: connect → `auth/login`
+   {username,password} → take `access_token` → send the special command **`auth` {token}** (separate
+   from `auth/login`) → then normal commands work.
+3. `player_queues/play_media {queue_id:"webos-sendspin-cinema", media:"library://track/3150"}`
+   (a `library://track/<id>` uri from `music/tracks/library_items`).
+
+Result: service `status:"playing"`, `connected:true`, `onCoreState pb=playing` — sound out of the TV.
+(Host helper `ma-cmd.js` does login→auth→command; lives in `/tmp`, not the repo — no creds committed.)
 
 ---
 
