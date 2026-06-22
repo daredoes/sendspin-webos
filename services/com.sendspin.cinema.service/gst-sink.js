@@ -1,132 +1,133 @@
 /*
  * gst-sink.js — the hardware-validated audio sink.
  *
- * Spawns gst-launch reading the encoded stream on stdin (fdsrc), decoding per the
- * negotiated codec, and playing through pulsesink — which mixes with live TV/HDMI
- * audio (Phase 1 + Phase 2, proven on hardware). One GstSink per stream format;
- * GstAudioProcessor recreates it on codec/sample-rate change.
+ * Two gst-launch stages with a thin node bridge between them:
  *
- * Volume (Music Assistant's player volume/mute) is applied STREAM-ONLY via an
- * in-pipeline gstreamer `volume` element that scales the decoded PCM samples. This
- * deliberately avoids PulseAudio's per-sink-input volume: on this LG webOS build
- * `pactl set-sink-input-volume` is broken (it garbles the channel volume struct —
- * "tried to set volumes for N channels"), `pacmd` has no reachable socket, and
- * `pulsesink volume=` is overridden by module-stream-restore. Scaling samples in
- * the pipeline is independent of all that and, by construction, only attenuates
- * OUR audio — never the television's own/master volume. gst-launch can't change an
- * element property at runtime, so a volume change respawns the pipeline at the new
- * gain (debounced, so a slider drag collapses to one respawn).
+ *   MA encoded frames                 raw S16LE PCM (stdout)        pulsesink
+ *   ──────────────►  [decode gst -q]  ──────────────►  [node gain]  ──────────►  [play gst] ──► speakers
+ *   (write -> stdin)  fdsrc!decode!                     scale samples  fdsrc!rawaudioparse!         (mixes with
+ *                     fdsink fd=1                        by volume      audioconvert!pulsesink        live HDMI)
  *
- * Kept separate from service.js so it can be unit-tested on-device without the
- * Luna bus. node 8.12 compatible.
+ * Volume/mute (Music Assistant's player volume) is applied STREAM-ONLY by scaling
+ * the decoded PCM in the node bridge — a live multiplier, so a volume change needs
+ * NO pipeline restart. The previous design respawned a single gst pipeline on every
+ * volume change, which discarded all the audio buffered ahead (gst + pulsesink read
+ * ahead, and MA streams gaplessly), so the pipeline resumed at the live stream edge
+ * — sometimes already inside the *next* track. That made volume changes skip/“change
+ * track”. Scaling in node fixes that and keeps the TV's own/master volume untouched.
+ *
+ * Why two gst processes (not pacat): pacat throws pa_stream_write Invalid argument
+ * on this webOS build; the raw-PCM -> pulsesink gst pipeline is the Phase 2-proven
+ * sink. `-q` on the decode stage is REQUIRED: without it gst-launch prints status
+ * text ("Pipeline is PREROLLING…") onto fd=1 and corrupts the PCM.
+ *
+ * Kept separate from service.js so it can be unit-tested on-device. node 8.12 compatible.
  */
 var spawn = require('child_process').spawn;
 
-/* A unique tag stamped on our pulsesink stream (client-name + media.name) so the
- * stream is identifiable in `pactl list sink-inputs` for debugging. */
+/* Identifying tag on our pulsesink stream (handy in `pactl list sink-inputs`). */
 var STREAM_TAG = 'sendspin-cinema';
 
-// pulsesink with our identifying tags. No spaces inside tokens so the caller's
-// ' '-split of the joined pipeline keeps each property a separate gst argument.
-var PULSESINK = 'pulsesink client-name=' + STREAM_TAG +
-                ' stream-properties=props,media.name=' + STREAM_TAG;
-
-// level: 0..1 gain for the `volume` element. Placed in the PCM domain (after
-// decode/audioconvert) so it scales samples — stream-only attenuation.
-function pipelineFor(format, level) {
+// Decode stage: encoded (stdin) -> normalized S16LE PCM (stdout, fd=1).
+function decodeArgs(format) {
   var rate = format.sample_rate || 48000;
   var ch = format.channels || 2;
-  var vol = 'volume volume=' + fmtLevel(level);
-  if (format.codec === 'pcm') {
-    return ['fdsrc fd=0',
-            'rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le sample-rate=' + rate + ' num-channels=' + ch,
-            'audioconvert', vol, 'audioresample', PULSESINK];
-  }
+  var caps = 'audio/x-raw,format=S16LE,channels=' + ch + ',rate=' + rate;
+  var head;
   if (format.codec === 'flac') {
-    return ['fdsrc fd=0', 'flacparse', 'avdec_flac', 'audioconvert', vol, 'audioresample', PULSESINK];
+    head = ['fdsrc', 'fd=0', '!', 'flacparse', '!', 'avdec_flac'];
+  } else if (format.codec === 'pcm') {
+    head = ['fdsrc', 'fd=0', '!', 'rawaudioparse', 'use-sink-caps=false', 'format=pcm',
+            'pcm-format=s16le', 'sample-rate=' + rate, 'num-channels=' + ch];
+  } else {
+    // Opus has no software decoder on this device; we never advertise it.
+    throw new Error('unsupported codec for on-device gst sink: ' + format.codec);
   }
-  // Opus has no software decoder on this device; we never advertise it, so this
-  // should be unreachable. Fail loudly if the server negotiates it anyway.
-  throw new Error('unsupported codec for on-device gst sink: ' + format.codec);
+  return ['-q'].concat(head).concat(['!', 'audioconvert', '!', 'audioresample', '!', caps, '!', 'fdsink', 'fd=1']);
 }
 
-// Clamp + format a 0..1 gain to a stable, space-free token for gst-launch.
-function fmtLevel(level) {
-  var l = (typeof level === 'number' && isFinite(level)) ? level : 1;
-  l = Math.max(0, Math.min(1, l));
-  return l.toFixed(3);
+// Play stage: S16LE PCM (stdin) -> pulsesink (mixes with live HDMI, Phase 1/2 proven).
+function playArgs(format) {
+  var rate = format.sample_rate || 48000;
+  var ch = format.channels || 2;
+  return ['-q', 'fdsrc', 'fd=0', '!', 'rawaudioparse', 'use-sink-caps=false', 'format=pcm',
+          'pcm-format=s16le', 'sample-rate=' + rate, 'num-channels=' + ch,
+          '!', 'audioconvert', '!', 'audioresample', '!',
+          'pulsesink', 'client-name=' + STREAM_TAG, 'stream-properties=props,media.name=' + STREAM_TAG];
 }
 
-// onEvent(name, detail) is optional; lets the caller react to spawn/exit without
-// this module depending on service state. names: 'error' | 'exit' | 'write'.
+// onEvent(name, detail) optional. names: 'error' | 'exit' | 'write'.
 function GstSink(format, onEvent) {
   this.codec = format.codec;
   this.sampleRate = format.sample_rate;
   this._format = format;
   this._onEvent = onEvent || function () {};
-  this._level = 1;        // currently-spawned gain (0..1)
-  this._wantLevel = 1;    // target gain after debounce
-  this._volTimer = null;
+  this._gain = 1;        // 0..1 linear gain applied to PCM
+  this._muted = false;
   this._spawn();
 }
 
 GstSink.prototype._spawn = function () {
-  var args = pipelineFor(this._format, this._level).join(' ! ').split(' ');
-  console.log('Sendspin sink: gst-launch-1.0 ' + args.join(' '));
-  this.proc = spawn('gst-launch-1.0', args, { stdio: ['pipe', 'inherit', 'inherit'] });
   var self = this;
-  this.proc.on('error', function (e) { self._onEvent('error', e); });
-  this.proc.on('exit', function (code) { self._onEvent('exit', code); });
-  if (this.proc.stdin) {
-    this.proc.stdin.on('error', function () { /* sink closed mid-write; ignore EPIPE */ });
-  }
+  console.log('Sendspin sink: decode[' + this._format.codec + '] -> gain -> pulsesink');
+  this.dec = spawn('gst-launch-1.0', decodeArgs(this._format), { stdio: ['pipe', 'pipe', 'inherit'] });
+  this.play = spawn('gst-launch-1.0', playArgs(this._format), { stdio: ['pipe', 'ignore', 'inherit'] });
+
+  this.dec.on('error', function (e) { self._onEvent('error', e); });
+  this.play.on('error', function (e) { self._onEvent('error', e); });
+  this.dec.on('exit', function (c) { self._onEvent('exit', c); });
+  this.play.on('exit', function (c) { self._onEvent('exit', c); });
+  if (this.dec.stdin) { this.dec.stdin.on('error', function () {}); }
+  if (this.play.stdin) { this.play.stdin.on('error', function () {}); }
+
+  // PCM bridge: scale by current gain and forward, with backpressure from the
+  // play stage's stdin so the realtime clock throttles the whole chain.
+  this.dec.stdout.on('data', function (buf) {
+    var g = self._muted ? 0 : self._gain;
+    if (g <= 0) {
+      buf.fill(0);
+    } else if (g < 0.999) {
+      for (var i = 0; i + 1 < buf.length; i += 2) {
+        var v = (buf.readInt16LE(i) * g) | 0;
+        buf.writeInt16LE(v < -32768 ? -32768 : (v > 32767 ? 32767 : v), i);
+      }
+    }
+    if (self.play && self.play.stdin && self.play.stdin.writable) {
+      if (!self.play.stdin.write(buf)) {
+        self.dec.stdout.pause();
+        self.play.stdin.once('drain', function () { if (self.dec && self.dec.stdout) { self.dec.stdout.resume(); } });
+      }
+    }
+  });
 };
 
+// Feed encoded MA frames into the decode stage.
 GstSink.prototype.write = function (buf) {
-  if (this.proc && this.proc.stdin && this.proc.stdin.writable) {
+  if (this.dec && this.dec.stdin && this.dec.stdin.writable) {
     this._onEvent('write', buf.length);
-    return this.proc.stdin.write(buf);
+    return this.dec.stdin.write(buf);
   }
   return false;
 };
 
-/* Set Music Assistant's player volume (0..100) + mute on OUR stream only. Mute is
- * gain 0; otherwise gain = volume/100. A change debounce-respawns the pipeline so
- * a slider drag (many rapid commands) collapses to a single respawn. */
+// Live volume (0..100) + mute — no respawn, applied in the PCM bridge above.
 GstSink.prototype.setVolume = function (volumePct, muted) {
   var pct = (typeof volumePct === 'number' && isFinite(volumePct)) ? volumePct : 100;
-  var lvl = Math.max(0, Math.min(1, pct / 100));
-  this._wantLevel = muted ? 0 : lvl;
-  if (Math.abs(this._wantLevel - this._level) < 0.001) { return; } // no real change
-  var self = this;
-  if (this._volTimer) { clearTimeout(this._volTimer); }
-  this._volTimer = setTimeout(function () {
-    self._volTimer = null;
-    if (!self.proc) { return; }                                   // stopped meanwhile
-    if (Math.abs(self._wantLevel - self._level) < 0.001) { return; }
-    self._level = self._wantLevel;
-    self._respawn();
-  }, 300);
-};
-
-// Restart the pipeline at the current this._level, feeding the same stdin stream.
-// flacparse/rawaudioparse resync to the next frame after the brief gap.
-GstSink.prototype._respawn = function () {
-  var old = this.proc;
-  if (old) {
-    try { old.stdin.end(); } catch (e) {}
-    try { old.kill('SIGTERM'); } catch (e) {}
-  }
-  this._spawn();
+  this._gain = Math.max(0, Math.min(1, pct / 100));
+  this._muted = !!muted;
 };
 
 GstSink.prototype.stop = function () {
-  if (this._volTimer) { clearTimeout(this._volTimer); this._volTimer = null; }
-  if (this.proc) {
-    try { this.proc.stdin.end(); } catch (e) {}
-    try { this.proc.kill('SIGTERM'); } catch (e) {}
-    this.proc = null;
+  var procs = [this.dec, this.play];
+  this.dec = null;
+  this.play = null;
+  for (var i = 0; i < procs.length; i++) {
+    var pr = procs[i];
+    if (pr) {
+      try { if (pr.stdin) { pr.stdin.end(); } } catch (e) {}
+      try { pr.kill('SIGTERM'); } catch (e) {}
+    }
   }
 };
 
-module.exports = { GstSink: GstSink, pipelineFor: pipelineFor };
+module.exports = { GstSink: GstSink, decodeArgs: decodeArgs, playArgs: playArgs };

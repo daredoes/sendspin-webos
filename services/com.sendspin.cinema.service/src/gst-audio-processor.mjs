@@ -80,10 +80,10 @@ export class GstAudioProcessor {
         }
     }
 
-    // Music Assistant volume/mute commands land here. Apply them to OUR pulse
-    // sink-input only (gst-sink uses `pactl set-sink-input-volume`), so the stream
-    // volume changes while the TV's own/master volume is left alone. stateManager
-    // holds the 0..100 volume + muted flag set by the protocol before this call.
+    // Music Assistant volume/mute commands land here. gst-sink applies them by
+    // scaling the decoded PCM in node (a live multiplier — no pipeline restart),
+    // so only the stream volume changes and the TV's own/master volume is left
+    // alone. stateManager holds the 0..100 volume + muted flag set by the protocol.
     updateVolume() {
         if (!this.sink || typeof this.sink.setVolume !== "function") {
             return;

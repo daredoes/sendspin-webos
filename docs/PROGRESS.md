@@ -65,20 +65,34 @@ unusable (verified on-device):
 - `pulsesink volume=` — **overridden** by module-stream-restore (sink-input stays
   100%).
 
-Solution: scale the decoded PCM with an in-pipeline **gstreamer `volume` element**
-(`… ! audioconvert ! volume volume=<gain> ! audioresample ! pulsesink …`). This is
-independent of PulseAudio's volume DB and, by construction, only attenuates our
-samples — the TV/HDMI path (mixed downstream in hardware, Phase 1) and the master
-sink are untouched. `flat-volumes = no` on this box, so even the master sink
-wouldn't move. gst-launch can't change an element prop at runtime, so a volume
-change **respawns the pipeline at the new gain, debounced 300 ms** (a slider drag
-collapses to one respawn; flacparse/rawaudioparse resync after the brief gap).
-Mute = gain 0. Code: `gst-sink.js` (`setVolume`/`_spawn`/`_respawn`),
-`GstAudioProcessor.updateVolume` reads `stateManager.volume`/`.muted`.
+Solution: scale the decoded PCM **in node**, independent of PulseAudio's volume DB
+(`flat-volumes = no`, and the TV/HDMI path mixes downstream in hardware, Phase 1, so
+only our samples change — never the master/TV volume). See the **superseded note**
+below: an earlier gst `volume`-element + pipeline-respawn version shipped first and
+caused a regression, so the sink was reworked.
+
+> ⚠️ **Superseded (caused "volume changes track").** v1 used a single
+> `… ! volume volume=<gain> ! pulsesink` pipeline and **respawned it on every volume
+> change** (gst-launch can't set props at runtime). But gst + pulsesink read ahead and
+> MA streams gaplessly, so respawning **discarded the audio buffered ahead** and the
+> new pipeline resumed at the live stream edge — sometimes already inside the *next*
+> track. Volume nudges skipped/changed track. Do not reintroduce pipeline respawn for
+> volume.
+
+**Current sink — two gst stages + a node gain bridge (no respawn):**
+```
+MA encoded → [gst -q: fdsrc!decode!…!fdsink fd=1] → node scales PCM by gain → [gst -q: fdsrc!rawaudioparse!…!pulsesink]
+```
+Volume/mute is a live multiplier in the node bridge, so a change needs **no pipeline
+restart** → nothing is discarded → no skipping. `-q` on the decode stage is REQUIRED
+(without it gst-launch prints status text onto fd=1 and corrupts the PCM). pacat was
+tried for the play stage but throws `pa_stream_write Invalid argument` here; the
+raw-PCM→pulsesink gst pipeline is the Phase 2-proven sink. Code: `gst-sink.js`
+(`decodeArgs`/`playArgs`/`setVolume`), `GstAudioProcessor.updateVolume`.
 
 **Proven on-device:** feeding a real FLAC into the *installed* `gst-sink.js`,
-`setVolume(50)` → respawn at `volume volume=0.500`, `setVolume(0,muted)` → `0.000`;
-the master `pcm_output` stayed `100%` throughout.
+`setVolume(30)` / mute / `setVolume(100)` all kept the **same two PIDs** (no respawn);
+decode→play chain runs clean (`exit 0`).
 
 ### 2. Config UI is now a thin Luna client (server URL + port + credentials)
 
