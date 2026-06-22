@@ -22,17 +22,45 @@ flowchart LR
     style P0 fill:#1a3a1a,color:#fff
     style P1 fill:#1a3a1a,color:#fff
     style P2 fill:#1a3a1a,color:#fff
-    style P3 fill:#2a3a1a,color:#fff
+    style P3 fill:#1a3a1a,color:#fff
     style P4 fill:#1a2a4a,color:#fff
-    style P5 fill:#1a2a4a,color:#fff
+    style P5 fill:#2a3a1a,color:#fff
     style P6 fill:#1a2a4a,color:#fff
 ```
 
+- ✅ **Phase 5 (keep-alive) — DONE on hardware (2026-06-21).** The installed service now stays
+  resident (keep-alive activity) and holds a single, stable, authenticated WebSocket to MA —
+  `connected:true` sustained 60 s+ with no client poking it. Root causes (idle-exit + duplicate
+  players) found and fixed. `bootd` auto-start (the boot-toggle half of Phase 5) still TODO. See
+  "Phase 5 — VERDICT" / the RESOLVED note under Phase 3.
 - ✅ **Phase 2 — COMPLETE on hardware (2026-06-21).** Production sink `node → gst-launch stdin (fdsrc) → pulsesink` validated for both MVP codecs, AND `sendspin-core.js` (extracted protocol/time-sync/state/player, Web-Audio decode dropped) **runs on the TV's node 8.12** and drives the full real-audio path end-to-end: 31 protocol-framed FLAC chunks → `GstAudioProcessor` → `GstSink` → `pulsesink`, clean EOS. See "Phase 2 — core VERDICT" below.
-- ✅ **Phase 3 — JS service packaged, installed, REGISTERED, and live MA round-trip PROVEN (2026-06-21).** Single IPK (`package-ipk.sh`) installs app + service; the service registers on the Luna bus (`luna://com.sendspin.cinema.service/status` returns live state) and completes the full authenticated Sendspin handshake against MA 2.8.3. See "Phase 3 — VERDICT" below. **Remaining:** keep-alive so it doesn't idle out (Phase 5), config UI (Phase 4), and actually routing a queue to the player to hear audio.
+- ✅ **Phase 3 — JS service packaged, installed, REGISTERED, and live MA round-trip PROVEN (2026-06-21).** Single IPK (`package-ipk.sh`) installs app + service; the service registers on the Luna bus (`luna://com.sendspin.cinema.service/status` returns live state) and completes the full authenticated Sendspin handshake against MA 2.8.3. See "Phase 3 — VERDICT" below. **Remaining:** config UI (Phase 4), `bootd` auto-start (Phase 5b), and routing a queue to the player in MA to actually hear audio.
 - ✅ **Phase 1 — PASSED on real hardware (2026-06-20).** Background audio mixes with a live input. See "Phase 1 — VERDICT" below.
 - ✅ **Phase 0 — COMPLETED on real hardware (2026-06-20).** Decode feasibility answered, and it **changed the decode strategy**: the on-device node is too old for the WASM decoders, but on-device **gstreamer** decodes FLAC to mixable PCM and plays it through `pulsesink`. Opus is the one open codec risk. See "Phase 0 — VERDICT" below.
-- ⬜ Phases 2–6 not started.
+- ⬜ Remaining: Phase 4 (UIs as Luna clients), Phase 5b (`bootd` boot toggle), Phase 6 (field test).
+
+---
+
+## Phase 5 — VERDICT: ✅ keep-alive done; service stays resident + connected (2026-06-21)
+
+Goal: stop webOS from idling out the background service so it holds a persistent MA connection.
+
+- **Keep-alive (`service.js`):** while a server is configured, hold one never-completed
+  activitymanager activity (`service.activityManager.create('sendspin-keepalive', …)`), released on
+  `disconnect`. This cancels `webos-service`'s 5 s idle `process.exit(0)`.
+- **Connect dedup (`service.js`):** a `connectGen` counter; `connect()` bumps it and every async hop
+  (MA login, player creation) aborts if superseded. Fixes the duplicate-player flap (one `setServer`
+  is redelivered ~12× during cold-start → was 12 same-`client_id` players evicting each other on MA).
+- **Stale-callback guard:** `onStateChange` only updates status if its player is still the current one.
+- **Debug:** opt-in on-device file log at `/tmp/sendspin-debug.log` (webOS discards service stdout),
+  enabled by `touch /tmp/sendspin-debug.enable`; off (zero cost) otherwise.
+
+**Proven on-device:** single `setServer` → exactly one `startPlayer`; 64+ consecutive `connected=true`
+1 s heartbeats, zero reconnects, surviving MA's 25 s WS heartbeat; `status` 22 s later (no client
+holding the service) → `connected:true`. The player sits registered in MA as "Sendspin Cinema" in
+`paused` (nothing queued). **Still TODO for full Phase 5:** `bootd` registration driven by
+`bootOnStart` (auto-start on TV boot); token refresh on JWT expiry; credential persistence across
+restarts.
 
 ---
 
@@ -74,17 +102,24 @@ credentials supplied at runtime): login → token → `/sendspin` → auth → *
 `stream/start` never arrived because nothing was queued to this player; the player does now
 register/auto-whitelist in MA as "Sendspin Cinema".)
 
-### ⚑ Open: the managed service's connection doesn't persist (→ Phase 5 keep-alive)
-Driving the **installed service** over Luna (`setServer {server,username,password}` + a held
-`status` subscription) reaches **`status:"paused"`** with `track` populated — i.e. it logs in,
-authenticates, and receives MA `server/state`/`group/update` — but every snapshot reports
-`connected:false`, whereas the **identical code run as a plain `node` process holds
-`isConnected:true` for 12 s+** (`svc-path-test.js`). Same bundle, same `node-env`, same MA. The
-delta is the webOS background-service lifecycle: the managed JS service is suspended/throttled when
-not actively servicing a Luna call, so the persistent WebSocket can't be maintained. This is exactly
-what **Phase 5** fixes (register a `com.webos.service.activitymanager` activity to keep the service
-resident with a live event loop; `bootd` for auto-start). Until then auth + protocol are proven;
-connection *persistence* is the remaining gap before audio can flow.
+### ✅ RESOLVED in Phase 5: the managed service now stays connected
+Earlier the installed service reached `status:"paused"` but always reported `connected:false`,
+while identical code as a plain `node` process held `isConnected:true`. On-device file logging
+(webOS discards a service's stdout) found **two** causes, neither a suspend/freeze (1 s heartbeats
+were gap-free):
+1. **The service idle-exited.** `webos-service`'s `ActivityManager` calls `process.exit(0)` ~5 s
+   after the last held activity (`activitymanager.js:_startTimer`). Fix: hold one never-completed
+   activity (`service.activityManager.create('sendspin-keepalive')`, which calls `_stopTimer`) while
+   a server is configured; release it on `disconnect`.
+2. **Duplicate players evicting each other.** A single `setServer` was delivered to the service
+   **12×** (the LS2 hub redelivers during the ~2.8 s node cold-start), so `connect()` ran 12×,
+   creating 12 `SendspinPlayer`s with the **same `client_id`** — and MA dedups players by client_id,
+   so they kicked each other → constant flapping. Fix: a monotonic `connectGen`; every async hop
+   (login, player creation) bails if superseded, collapsing the burst to **one** live player.
+
+After both fixes: 64+ consecutive `connected=true` 1 s heartbeats with a single `startPlayer` and
+zero reconnects, surviving past MA's 25 s WS heartbeat; and `status` 22 s after one `setServer`
+(nothing holding the service) returns `connected:true`. See "Phase 5 — VERDICT".
 
 ### Auth baked into core + service (rebuilt + reinstalled + verified 2026-06-21)
 - `build-core.mjs` now injects an **auth preamble** into `SendspinPlayer.connect`: on ws open it

@@ -27,6 +27,19 @@ var maLogin = require('./ma-login');
 var SERVICE_ID = 'com.sendspin.cinema.service';
 var service = new Service(SERVICE_ID);
 
+/* Opt-in file log: webOS discards a JS service's stdout, so this is the only way
+ * to see lifecycle events on-device. Off by default (zero cost); enable for
+ * debugging by `touch /tmp/sendspin-debug.enable` before the service starts. */
+var fs = require('fs');
+var DBG_FILE = '/tmp/sendspin-debug.log';
+var DBG_ON = false;
+try { fs.statSync('/tmp/sendspin-debug.enable'); DBG_ON = true; } catch (e) { DBG_ON = false; }
+function dbg(m) {
+  if (!DBG_ON) { return; }
+  try { fs.appendFileSync(DBG_FILE, new Date().toISOString() + ' ' + m + '\n'); } catch (e) {}
+}
+dbg('=== service process started ===');
+
 var MA_SENDSPIN_PORT = 8095; // Music Assistant webserver port (serves /ws + /sendspin)
 
 /* ------------------------------------------------------------------ state */
@@ -44,6 +57,33 @@ var state = {
 
 var player = null;
 var statusSubscribers = [];
+
+/* ---------------------------------------------------------------- keep-alive */
+/* webos-service exits the process (process.exit(0)) after ~5s with no held
+ * activitymanager activity. A background audio daemon must stay resident to keep
+ * its WebSocket to Music Assistant open, so while a server is configured we hold
+ * one never-completed activity (created via the bundled ActivityManager, which
+ * calls _stopTimer and cancels the idle-exit). Released on disconnect/idle. */
+var keepAlive = null;
+
+function startKeepAlive() {
+  if (keepAlive) { return; }
+  try {
+    service.activityManager.create('sendspin-keepalive', function (activity) {
+      keepAlive = activity;
+      console.log('Sendspin: keep-alive activity held (service stays resident)');
+    });
+  } catch (e) {
+    console.error('Sendspin: keep-alive create failed', e);
+  }
+}
+
+function stopKeepAlive() {
+  if (!keepAlive) { return; }
+  try { service.activityManager.complete(keepAlive, function () {}); } catch (e) {}
+  keepAlive = null;
+  console.log('Sendspin: keep-alive released (service may idle-exit)');
+}
 
 function snapshot() {
   return {
@@ -112,12 +152,22 @@ function onCoreState(s) {
   if (s.groupState && s.groupState.playback_state) {
     state.status = (s.groupState.playback_state === 'playing') ? 'playing' : 'paused';
   }
+  dbg('onCoreState pb=' + (s.groupState && s.groupState.playback_state) + ' isConnected=' + !!(player && player.isConnected));
   pushStatus();
 }
 
-function startPlayer(baseUrl, authToken) {
+// Monotonic connect generation. Every connect() bumps it; any async work (login,
+// player creation) carries the generation it started under and bails if a newer
+// connect() has superseded it. This collapses duplicate/rapid setServer calls
+// into a single live player — critical because MA dedups players by client_id, so
+// multiple players sharing our client_id would evict each other and flap.
+var connectGen = 0;
+
+function startPlayer(baseUrl, authToken, gen) {
+  if (gen !== connectGen) { dbg('startPlayer superseded gen=' + gen + ' cur=' + connectGen); return; }
+  if (player) { try { player.disconnect(); } catch (e) {} player = null; }
   var safeId = 'webos-' + state.playerName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-  player = new SendspinPlayer({
+  var thisPlayer = new SendspinPlayer({
     playerId: safeId,
     clientName: state.playerName,
     baseUrl: baseUrl,
@@ -125,29 +175,35 @@ function startPlayer(baseUrl, authToken) {
     codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
     storage: null,
     createSink: makeSink,
-    onStateChange: onCoreState
+    onStateChange: function (s) { if (thisPlayer === player) { onCoreState(s); } }
   });
-  player.connect().catch(function (e) { setStatus('error', 'connect ' + baseUrl + ': ' + e); });
+  player = thisPlayer;
+  dbg('startPlayer connecting gen=' + gen + ' to ' + baseUrl);
+  player.connect()
+    .then(function () { dbg('player.connect() resolved isConnected=' + thisPlayer.isConnected); })
+    .catch(function (e) { dbg('player.connect() rejected ' + (e && (e.message || e))); if (thisPlayer === player) { setStatus('error', 'connect ' + baseUrl + ': ' + e); } });
 }
 
 function connect() {
+  var gen = ++connectGen;
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
-  if (!state.server) { setStatus('idle'); return; }
+  if (!state.server) { stopKeepAlive(); setStatus('idle'); return; }
   var baseUrl;
   try { baseUrl = buildBaseUrl(state.server); }
   catch (e) { setStatus('error', 'bad server "' + state.server + '": ' + e); return; }
+  startKeepAlive();                      // stay resident while we hold a connection
   setStatus('connecting');
 
   if (state.username) {
     // MA has auth: exchange username/password for an access token, then connect.
     var hostPort = new URL(baseUrl).host;
     maLogin.getToken(hostPort, state.username, state.password, function (err, token) {
+      if (gen !== connectGen) { dbg('login superseded gen=' + gen + ' cur=' + connectGen); return; }
       if (err) { setStatus('error', 'login: ' + (err.message || err)); return; }
-      if (!state.server) { return; } // disconnected while logging in
-      startPlayer(baseUrl, token);
+      startPlayer(baseUrl, token, gen);
     });
   } else {
-    startPlayer(baseUrl, null);
+    startPlayer(baseUrl, null, gen);
   }
 }
 
@@ -161,6 +217,7 @@ function forward(command) {
 
 service.register('setServer', function (msg) {
   var p = msg.payload || {};
+  dbg('setServer called server=' + p.server);
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
   if (p.password !== undefined) { state.password = p.password || null; }
@@ -208,7 +265,9 @@ service.register('previous', function (msg) {
 });
 
 service.register('disconnect', function (msg) {
+  state.server = null;
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
+  stopKeepAlive();                       // allow the service to idle-exit again
   setStatus('idle');
   msg.respond({ returnValue: true, state: snapshot() });
 });
