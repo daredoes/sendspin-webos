@@ -36,6 +36,8 @@
             backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
         }
         #settings-trigger svg { width: 40px; height: 40px; fill: #fff; opacity: 0.7; }
+        #settings-trigger:focus { outline: none; background: var(--accent); box-shadow: 0 0 40px var(--accent); }
+        #settings-trigger:focus svg { opacity: 1; }
 
         /* Connection pill (top-left) */
         #conn-pill {
@@ -151,6 +153,11 @@
         .srv-item b { display: block; }
         .srv-item span { color: rgba(255,255,255,0.5); font-size: 1.1rem; font-family: monospace; }
         .srv-item:focus { border-color: #fff; background: rgba(0,132,255,0.25); transform: scale(1.02); outline: none; }
+        .toggle-item { display: flex; align-items: center; gap: 16px; }
+        .toggle-item .toggle-box { font-size: 2.2rem; line-height: 1; color: var(--accent); }
+        .toggle-item.on .toggle-box { color: #2ecc71; }
+        .toggle-label b { display: block; }
+        .toggle-label span { color: rgba(255,255,255,0.5); font-size: 1.1rem; }
 
         .actions { display: flex; gap: 24px; margin-top: 10px; }
         .action-btn {
@@ -170,7 +177,7 @@
 
     <div id="conn-pill"><span id="conn-dot"></span><span id="conn-text">Idle</span></div>
 
-    <div id="settings-trigger" onclick="openSettings()">
+    <div id="settings-trigger" tabindex="0" onclick="openSettings()">
         <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.81,11.69,4.81,12c0,0.31,0.02,0.65,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
     </div>
 
@@ -208,6 +215,13 @@
             <div class="field">
                 <label for="input-vol">Default volume (0&ndash;100)</label>
                 <input type="text" id="input-vol" inputmode="numeric" placeholder="70">
+            </div>
+            <div class="srv-item toggle-item" id="keepawake-toggle" tabindex="0" onclick="toggleKeepAwake()">
+                <span class="toggle-box" id="keepawake-box">☐</span>
+                <span class="toggle-label">
+                    <b>Keep TV awake</b>
+                    <span>Block the screensaver so the TV stays on while this app is open</span>
+                </span>
             </div>
             <div class="actions">
                 <button class="action-btn primary" id="save-btn" onclick="saveSetup()">Save &amp; Connect</button>
@@ -272,6 +286,30 @@
                 return null;
             }
         }
+
+        // ------------------------------------------------ keep-TV-awake (screensaver)
+        // webOS dims/blanks the screen (screensaver) and eventually powers the panel
+        // off after inactivity — and an audio-only player gets no input for long
+        // stretches. The veto must be done by an on-TV Luna client, and the SERVICE
+        // owns it (see service.js: registerScreenSaverRequest): it's always resident
+        // and can be driven from the LAN web page too, which a remote browser can't.
+        // So this UI is just a thin controller — flip the flag on the service and
+        // reflect whatever state the service reports back.
+        var keepAwakeEnabled = false;
+
+        function renderKeepAwake(on) {
+            keepAwakeEnabled = !!on;
+            var t = document.getElementById('keepawake-toggle');
+            var box = document.getElementById('keepawake-box');
+            if (t) { t.classList.toggle('on', keepAwakeEnabled); }
+            if (box) { box.textContent = keepAwakeEnabled ? '☑' : '☐'; }
+        }
+
+        window.toggleKeepAwake = function () {
+            var on = !keepAwakeEnabled;
+            renderKeepAwake(on);                       // optimistic; status will confirm
+            lunaCall('setKeepAwake', { keepAwake: on });
+        };
 
         // --------------------------------------------------------------- elements
         var titleEl = document.getElementById('title');
@@ -341,6 +379,7 @@
             document.getElementById('input-pass').value = c.pass;
             document.getElementById('input-name').value = c.name;
             document.getElementById('input-vol').value = c.vol;
+            renderKeepAwake(lastStatus && lastStatus.keepAwake);
             var configured = hasCfg() || !!(lastStatus && lastStatus.server);
             document.getElementById('cancel-btn').style.display = configured ? 'block' : 'none';
             setupStatus.textContent = '';
@@ -498,6 +537,7 @@
         function renderStatus(st) {
             if (!st) { return; }
             lastStatus = st;
+            if (st.keepAwake != null) { renderKeepAwake(st.keepAwake); }
             if (st.configUrl) {
                 var lu = document.getElementById('lan-url');
                 if (lu) { lu.textContent = st.configUrl; }
@@ -591,6 +631,30 @@
             els[Math.max(0, Math.min(els.length - 1, i + dir))].focus();
         }
 
+        // The now-playing screen had NO D-pad nav — only the pointer (Magic Remote)
+        // could reach the gear/transport buttons, so a standard remote couldn't open
+        // settings or control playback. Give it the same walk: gear, then prev/play/
+        // next. showUI() slides the chrome in (the gear lives off-screen until then).
+        function npFocusables() {
+            return [
+                document.getElementById('settings-trigger'),
+                document.getElementById('prev-btn'),
+                document.getElementById('play-btn'),
+                document.getElementById('next-btn')
+            ].filter(function (el) { return el; });
+        }
+        function npMove(dir) {
+            showUI();                                  // reveal the controls we're moving through
+            var els = npFocusables();
+            if (!els.length) { return; }
+            var i = els.indexOf(document.activeElement);
+            if (i === -1) {
+                (document.getElementById('play-btn') || els[0]).focus();
+                return;
+            }
+            els[Math.max(0, Math.min(els.length - 1, i + dir))].focus();
+        }
+
         // ------------------------------------------------- remote transport keys
         // The TV remote's media keys arrive as keydown on the focused app. Map them
         // to the service's transport commands. Covers both the DOM e.key names and
@@ -621,7 +685,16 @@
         window.addEventListener('keydown', function (e) {
             showUI();
             if (setupOverlay.style.display !== 'flex') {
-                handleMediaKey(e); // now-playing screen: remote transport keys
+                // Now-playing screen: D-pad walks the gear + transport buttons,
+                // OK activates the focused one, media keys still work directly.
+                var nk = e.key, nkc = e.keyCode;
+                if (nk === 'ArrowLeft' || nk === 'ArrowUp' || nkc === 37 || nkc === 38) { e.preventDefault(); npMove(-1); return; }
+                if (nk === 'ArrowRight' || nk === 'ArrowDown' || nkc === 39 || nkc === 40) { e.preventDefault(); npMove(1); return; }
+                if ((nk === 'Enter' || nkc === 13) &&
+                    document.activeElement && npFocusables().indexOf(document.activeElement) !== -1) {
+                    e.preventDefault(); document.activeElement.click(); return;
+                }
+                handleMediaKey(e); // remote transport keys
                 return;
             }
             var k = e.key, kc = e.keyCode;

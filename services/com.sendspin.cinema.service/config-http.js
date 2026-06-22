@@ -12,7 +12,8 @@
  * start(port, handlers) where handlers = {
  *   snapshot:   function() -> state object,
  *   discover:   function(cb(err, servers)),
- *   applyConfig:function({server, username, password, playerName}) -> state object
+ *   applyConfig:function({server, username, password, playerName}) -> state object,
+ *   setKeepAwake:function(bool) -> bool
  * }
  * Returns the http.Server (or null if it could not bind).
  */
@@ -57,9 +58,19 @@ function start(port, handlers) {
           username: body.username || '',
           password: body.password || '',
           playerName: body.playerName || '',
-          defaultVolume: body.defaultVolume
+          defaultVolume: body.defaultVolume,
+          keepAwake: body.keepAwake
         });
         send(res, 200, { state: state });
+      });
+      return;
+    }
+    // Toggle keep-awake on its own (no server required) so the checkbox applies
+    // instantly, even before a server is configured.
+    if (req.method === 'POST' && url === '/api/keepawake') {
+      readBody(req, function (body) {
+        var on = handlers.setKeepAwake(!!(body && body.keepAwake));
+        send(res, 200, { keepAwake: on });
       });
       return;
     }
@@ -99,6 +110,9 @@ var PAGE = '<!DOCTYPE html>\n' +
 '.srv:active{border-color:#3b82f6}.srv b{display:block}.srv span{color:#8b93a7;font-size:.85rem}' +
 '#msg{margin-top:18px;min-height:1.2em;font-size:.95rem}.ok{color:#34d399}.err{color:#f87171}' +
 '.pill{display:inline-block;padding:4px 10px;border-radius:20px;font-size:.8rem;background:#1c2230;color:#8b93a7;margin-bottom:18px}' +
+'.check{display:flex;align-items:flex-start;gap:12px;margin-top:22px;padding:14px;background:#141823;border:1px solid #29303f;border-radius:10px;cursor:pointer}' +
+'.check input{width:22px;height:22px;flex:0 0 auto;margin-top:2px;accent-color:#3b82f6}' +
+'.check .t{font-size:.95rem}.check .t small{display:block;color:#8b93a7;margin-top:3px;font-size:.82rem;text-transform:none;letter-spacing:0}' +
 '</style></head><body><div class="wrap">' +
 '<h1>Sendspin Cinema</h1><p class="sub">Configure this TV player from your computer.</p>' +
 '<div class="pill" id="conn">…</div>' +
@@ -111,6 +125,8 @@ var PAGE = '<!DOCTYPE html>\n' +
 '<label>Password (optional)</label><input id="pass" type="password" autocomplete="current-password">' +
 '<label>Player name</label><input id="name" placeholder="Cinema TV">' +
 '<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="70">' +
+'<label class="check"><input type="checkbox" id="keepAwake">' +
+'<span class="t">Keep TV awake<small>Block the screensaver so the TV stays on while this player runs. Applies immediately.</small></span></label>' +
 '<button class="primary" id="saveBtn" type="button">Save &amp; Connect</button>' +
 '<div id="msg"></div></div><script>' +
 'function $(i){return document.getElementById(i)}' +
@@ -119,7 +135,11 @@ var PAGE = '<!DOCTYPE html>\n' +
 '$("conn").textContent=(s.connected?"Connected":(s.status||"idle"))+(s.error?(" — "+s.error):"");' +
 'if(s.server&&!$("host").value)$("host").value=s.server;if(s.username&&!$("user").value)$("user").value=s.username;' +
 'if(s.playerName&&!$("name").value)$("name").value=s.playerName;' +
-'if(s.defaultVolume!=null&&$("vol").value==="")$("vol").value=s.defaultVolume}).catch(function(){})}' +
+'if(s.defaultVolume!=null&&$("vol").value==="")$("vol").value=s.defaultVolume;' +
+'if(s.keepAwake!=null&&document.activeElement!==$("keepAwake"))$("keepAwake").checked=!!s.keepAwake}).catch(function(){})}' +
+'$("keepAwake").onchange=function(){fetch("/api/keepawake",{method:"POST",headers:{"Content-Type":"application/json"},' +
+'body:JSON.stringify({keepAwake:$("keepAwake").checked})}).then(function(r){return r.json()}).then(function(d){' +
+'setMsg(d.keepAwake?"Keep-awake on — screensaver blocked.":"Keep-awake off.","ok")}).catch(function(e){setMsg("Failed: "+e,"err")})};' +
 '$("scanBtn").onclick=function(){setMsg("Scanning…");$("scanBtn").disabled=true;' +
 'fetch("/api/discover").then(function(r){return r.json()}).then(function(d){$("scanBtn").disabled=false;' +
 'var box=$("servers");box.innerHTML="";var list=d.servers||[];if(!list.length){setMsg("No servers found. Enter the address manually.","err");return}' +
@@ -130,7 +150,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '$("saveBtn").onclick=function(){var host=$("host").value.trim();if(!host){setMsg("Enter a server URL or IP","err");return}' +
 'var server=host;var port=$("port").value.trim();if(port&&!/:[0-9]+($|\\/)/.test(host.replace(/^\\w+:\\/\\//,"")))server=host.replace(/\\/+$/,"")+":"+port;' +
 'setMsg("Saving…");fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({' +
-'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV",defaultVolume:$("vol").value.trim()})})' +
+'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV",defaultVolume:$("vol").value.trim(),keepAwake:$("keepAwake").checked})})' +
 '.then(function(r){return r.json()}).then(function(d){if(d.error){setMsg("Error: "+d.error,"err");return}' +
 'setMsg("Saved. Connecting to Music Assistant…","ok");setTimeout(refresh,1500)}).catch(function(e){setMsg("Save failed: "+e,"err")})};' +
 'refresh();setInterval(refresh,4000);</script></body></html>';

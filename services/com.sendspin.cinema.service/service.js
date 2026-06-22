@@ -70,6 +70,7 @@ var state = {
   playerName: 'Sendspin Cinema',
   bootOnStart: true,
   defaultVolume: 70,       // 0..100 volume applied to a fresh player (until MA sets one)
+  keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
   track: null,             // { title, artist, artwork } when known
   error: null
 };
@@ -110,6 +111,49 @@ function stopKeepAlive() {
   console.log('Sendspin: keep-alive released (service may idle-exit)');
 }
 
+/* ------------------------------------------ keep-TV-awake (screensaver veto) */
+/* Separate from the keep-alive above: that keeps the *service process* resident;
+ * this keeps the *TV panel* from blanking. webOS asks all registered clients
+ * before starting its screensaver. We hold a subscription and, while keepAwake
+ * is on, answer ack:false to veto it — so an audio-only session (no remote input
+ * for long stretches) doesn't dim/turn the screen off. The service owns this (not
+ * the foreground app) so it can be toggled from the LAN web page too: a remote
+ * browser can't make this on-TV Luna call itself. */
+var SS_REGISTER = 'luna://com.webos.service.tvpower/power/registerScreenSaverRequest';
+var SS_RESPONSE = 'luna://com.webos.service.tvpower/power/responseScreenSaverRequest';
+var SS_TURNON = 'luna://com.webos.service.tvpower/power/turnOnScreen';
+var SS_CLIENT = 'com.sendspin.cinema.service';
+var screenSaverSub = null;
+
+function startScreenSaverGuard() {
+  if (screenSaverSub) { return; }
+  try {
+    screenSaverSub = service.subscribe(SS_REGISTER, { subscribe: true, clientName: SS_CLIENT });
+    screenSaverSub.on('response', function (m) {
+      var p = (m && m.payload) || {};
+      // Fired when the TV is about to start its screensaver. Respond before it
+      // times out: veto (ack:false) only while keepAwake is on, else allow.
+      if (p.state === 'Active' && p.timestamp != null) {
+        service.call(SS_RESPONSE, { clientName: SS_CLIENT, ack: !state.keepAwake, timestamp: p.timestamp }, function () {});
+      }
+    });
+    screenSaverSub.on('cancel', function () { screenSaverSub = null; });
+    console.log('Sendspin: screensaver guard registered');
+  } catch (e) {
+    console.error('Sendspin: screensaver guard failed', e);
+    screenSaverSub = null;
+  }
+}
+
+function setKeepAwake(on) {
+  state.keepAwake = !!on;
+  savePersist();
+  // If turning on after the panel already blanked, wake it now.
+  if (state.keepAwake) { try { service.call(SS_TURNON, {}, function () {}); } catch (e) {} }
+  pushStatus();
+  return state.keepAwake;
+}
+
 function snapshot() {
   return {
     status: state.status,
@@ -118,6 +162,7 @@ function snapshot() {
     playerName: state.playerName,
     bootOnStart: state.bootOnStart,
     defaultVolume: state.defaultVolume,
+    keepAwake: state.keepAwake,
     track: state.track,
     error: state.error,
     connected: !!(player && player.isConnected),
@@ -255,7 +300,8 @@ function savePersist() {
     password: state.password,
     playerName: state.playerName,
     bootOnStart: state.bootOnStart,
-    defaultVolume: state.defaultVolume
+    defaultVolume: state.defaultVolume,
+    keepAwake: state.keepAwake
   });
 }
 
@@ -267,6 +313,7 @@ function applyConfig(p) {
     var dv = clampVol(p.defaultVolume);
     if (dv !== null) { state.defaultVolume = dv; }
   }
+  if (p.keepAwake !== undefined) { setKeepAwake(p.keepAwake); }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
   if (p.password !== undefined) { state.password = p.password || null; }
@@ -294,6 +341,11 @@ service.register('setPlayerName', function (msg) {
   savePersist();
   if (state.server) { connect(); } // re-register under the new name
   msg.respond({ returnValue: true, state: snapshot() });
+});
+
+service.register('setKeepAwake', function (msg) {
+  var on = setKeepAwake(!!(msg.payload && msg.payload.keepAwake));
+  msg.respond({ returnValue: true, keepAwake: on, state: snapshot() });
 });
 
 service.register('setBootOnStart', function (msg) {
@@ -352,9 +404,11 @@ service.register('status', function (msg) {
 configHttp.start(CONFIG_HTTP_PORT, {
   snapshot: snapshot,
   discover: function (cb) { mdns.discover(3000, cb); }, // config-http calls discover(cb)
-  applyConfig: applyConfig
+  applyConfig: applyConfig,
+  setKeepAwake: setKeepAwake
 });
 startKeepAlive();
+startScreenSaverGuard();
 
 /* Restore config saved on the persistent partition (survives app reinstall/reboot)
  * and reconnect on our own — no need to wait for the app to re-push it. */
@@ -364,6 +418,7 @@ startKeepAlive();
   if (saved.playerName) { state.playerName = saved.playerName; }
   if (typeof saved.bootOnStart === 'boolean') { state.bootOnStart = saved.bootOnStart; }
   if (saved.defaultVolume !== undefined) { var sv = clampVol(saved.defaultVolume); if (sv !== null) { state.defaultVolume = sv; } }
+  if (typeof saved.keepAwake === 'boolean') { state.keepAwake = saved.keepAwake; }
   state.server = saved.server || null;
   state.username = saved.username || null;
   state.password = saved.password || null;

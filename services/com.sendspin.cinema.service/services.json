@@ -16,6 +16,7 @@
         "setServer": "public",
         "setPlayerName": "public",
         "setBootOnStart": "public",
+        "setKeepAwake": "public",
         "status": "public"
       }
     }
