@@ -408,62 +408,73 @@ function applyConfig(p) {
 
 /* --------------------------------------------------------------- Luna API */
 
-service.register('setServer', function (msg) {
+/* Wrap service.register so every inbound Luna method call is traced to the debug
+ * log. Invaluable on-device: webOS discards a JS service's stdout, so this is the
+ * only way to confirm the app's transport/config calls actually reach the service
+ * (e.g. after an id rename, where a bad bus name silently drops every call). */
+function reg(name, handler) {
+  service.register(name, function (msg) {
+    try { dbg('luna ' + name + ' ' + JSON.stringify((msg && msg.payload) || {})); } catch (e) {}
+    return handler(msg);
+  });
+}
+
+reg('setServer', function (msg) {
   var state2 = applyConfig(msg.payload || {});
   msg.respond({ returnValue: true, state: state2 });
 });
 
-service.register('discover', function (msg) {
+reg('discover', function (msg) {
   var timeout = (msg.payload && msg.payload.timeoutMs) || 3000;
   mdns.discover(timeout, function (err, servers) {
     msg.respond({ returnValue: !err, error: err ? String(err.message || err) : null, servers: servers || [] });
   });
 });
 
-service.register('setPlayerName', function (msg) {
+reg('setPlayerName', function (msg) {
   state.playerName = (msg.payload && msg.payload.playerName) || state.playerName;
   savePersist();
   if (state.server) { connect(); } // re-register under the new name
   msg.respond({ returnValue: true, state: snapshot() });
 });
 
-service.register('setKeepAwake', function (msg) {
+reg('setKeepAwake', function (msg) {
   var on = setKeepAwake(!!(msg.payload && msg.payload.keepAwake));
   msg.respond({ returnValue: true, keepAwake: on, state: snapshot() });
 });
 
-service.register('setBootOnStart', function (msg) {
+reg('setBootOnStart', function (msg) {
   var on = setBootOnStart(!!(msg.payload && msg.payload.bootOnStart));
   msg.respond({ returnValue: true, bootOnStart: on, state: snapshot() });
 });
 
-service.register('play', function (msg) {
+reg('play', function (msg) {
   if (!player) { connect(); }
   var r = forward('play');
   msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
 });
 
-service.register('pause', function (msg) {
+reg('pause', function (msg) {
   var r = forward('pause');
   msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
 });
 
-service.register('stop', function (msg) {
+reg('stop', function (msg) {
   var r = forward('stop');
   msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
 });
 
-service.register('next', function (msg) {
+reg('next', function (msg) {
   var r = forward('next');
   msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
 });
 
-service.register('previous', function (msg) {
+reg('previous', function (msg) {
   var r = forward('previous');
   msg.respond({ returnValue: r.ok, reason: r.reason, state: snapshot() });
 });
 
-service.register('disconnect', function (msg) {
+reg('disconnect', function (msg) {
   state.server = null;
   savePersist();                         // forget the server across reinstall/reboot too
   clearReconnect();                      // stop any pending retry
@@ -472,7 +483,7 @@ service.register('disconnect', function (msg) {
   msg.respond({ returnValue: true, state: snapshot() });
 });
 
-service.register('status', function (msg) {
+reg('status', function (msg) {
   if (msg.isSubscription) { statusSubscribers.push(msg); }
   msg.respond({ returnValue: true, subscribed: !!msg.isSubscription, state: snapshot() });
 });

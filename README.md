@@ -147,6 +147,15 @@ Music Assistant often hides newly discovered custom web players by default:
 * **Keep TV awake** blocks the webOS **screensaver / panel blanking**. It does **not**
   override the separate multi-hour *Auto Power Off* inactivity timer — disable that in
   **Settings → General → Auto Power Off** if you want truly indefinite playback.
+  On-device investigation (2026-06): the timer is owned by `tvpowerd`
+  (`com.webos.service.tvpower/power`); a client *can* register
+  `registerPowerOffRequest` and there is a `cancelPowerOff` / "Always On" timer-skip
+  path, but the cancel is an internal tvpowerd call with no documented client veto,
+  and the only way to confirm a deferral is a 4-hour idle wait or a forced power
+  cycle — too risky to ship blind (a wrong veto could leave the TV unable to power
+  off). Left as a documented setting toggle until it can be verified on stable
+  hardware. Notes: [`docs/AUDIO-CONCURRENCY.md`](docs/AUDIO-CONCURRENCY.md) covers the
+  related audio-focus behaviour.
 * Audio decoding relies on the TV's on-device **gstreamer** (the bundled Node is too old
   for WASM decoders). FLAC is validated; exotic codecs may need MA-side transcoding.
 * The service is **jailed**: only `/media/internal` (and `/tmp`) are writable, which is

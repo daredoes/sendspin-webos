@@ -77,6 +77,33 @@ was actually running.
 service) and cold-starts on a Luna call. Old `com.sendspin.cinema` + `com.sendspin.webos-daemon`
 uninstalled from the TV.
 
+### ✅ Verified on the bus / ⚠️ app-control E2E still needs a stable TV
+
+Confirmed on `192.168.1.32`: with the hyphen-free name the service **registers on the
+Luna bus** (`ls-monitor -l` shows `com.sendspin.webos.service`, dynamic node service)
+and the hub cold-starts it on a call — both impossible under the old hyphenated name.
+What I could **not** cleanly confirm from the CLI is end-to-end *app → service method
+delivery*: root `luna-send` isn't a faithful proxy for the app's WebAppMgr caller
+identity (calls came back empty), and the test TV is flaky/overloaded (load avg ~36 per
+project memory) — the dynamic service idle-exited between calls and launches raced, so
+observations were inconsistent. **To verify on stable hardware:**
+`touch /tmp/sendspin-debug.enable`, open the app, press play/pause/next, then check
+`/tmp/sendspin-debug.log` for `luna play` / `luna pause` lines (the new inbound-call
+tracing added in this batch). If they appear, app controls work end-to-end.
+
+### 🔌 Auto Power Off (#1, the last open backlog item) — investigated, documented
+
+Probed `tvpowerd` on-device: the multi-hour timer is `com.webos.service.tvpower/power`;
+a client can `registerPowerOffRequest`, and there's a `cancelPowerOff` / "Always On"
+timer-skip path. But `cancelPowerOff` is an internal tvpowerd call with no documented
+client veto, and any deferral is unverifiable without a 4-hour idle wait or a forced
+power cycle (memory: **never reboot this TV**). A wrong veto could leave the TV unable
+to power off → **not shipped blind.** Documented as a setting toggle in the README per
+the backlog's own fallback ("if not, document it prominently"). Also added: **inbound
+Luna-call tracing** (`reg()` wrapper in `service.js`) — gated behind the existing
+`/tmp/sendspin-debug.enable` flag, zero cost when off, and the tool needed to verify app
+controls above.
+
 ### 🎵 Background-audio concurrency question
 
 "Music stops when another channel plays" → root-caused to **webOS `audiod`/broadcast
