@@ -28,7 +28,7 @@ set -e
 
 HOST="${1:-${TV_HOST:-192.168.1.32}}"
 PASS="${2:-${TV_PASS:-alpine}}"
-APP_ID="${APP_ID:-com.sendspin.cinema}"
+APP_ID="${APP_ID:-com.sendspin.webos}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPDIR="/media/developer/apps/usr/palm/applications/$APP_ID"
 REMOTE_IPK="/media/developer/${APP_ID}.deploy.ipk"

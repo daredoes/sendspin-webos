@@ -1,5 +1,5 @@
 /*
- * com.sendspin.cinema.service — background audio daemon for webOS.
+ * com.sendspin.webos.service — background audio daemon for webOS.
  *
  * Headless JS service. Acts as a Sendspin / Music Assistant player: connects over
  * WebSocket, accepts pushed audio streams, and feeds each chunk's encoded payload
@@ -26,9 +26,10 @@ var maLogin = require('./ma-login');
 var mdns = require('./mdns-discover');
 var configHttp = require('./config-http');
 var persist = require('./persist');
+var util = require('./util');
 var os = require('os');
 
-var SERVICE_ID = 'com.sendspin.cinema.service';
+var SERVICE_ID = 'com.sendspin.webos.service';
 var service = new Service(SERVICE_ID);
 
 var CONFIG_HTTP_PORT = 3917; // LAN config web UI (browse http://<tv-ip>:3917)
@@ -58,7 +59,7 @@ function dbg(m) {
 }
 dbg('=== service process started ===');
 
-var MA_SENDSPIN_PORT = 8095; // Music Assistant webserver port (serves /ws + /sendspin)
+var MA_SENDSPIN_PORT = util.MA_SENDSPIN_PORT; // Music Assistant webserver port
 
 /* ------------------------------------------------------------------ state */
 
@@ -71,15 +72,14 @@ var state = {
   bootOnStart: true,
   defaultVolume: 70,       // 0..100 volume applied to a fresh player (until MA sets one)
   keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
+  configPin: null,         // 4-digit PIN required to change config from the LAN page
+  retrying: false,         // true while a reconnect is scheduled after a failure
+  nextRetryMs: null,       // backoff delay of the pending reconnect, if any
   track: null,             // { title, artist, artwork } when known
   error: null
 };
 
-function clampVol(v) {
-  var n = parseInt(v, 10);
-  if (isNaN(n)) { return null; }
-  return Math.max(0, Math.min(100, n));
-}
+var clampVol = util.clampVol;
 
 var player = null;
 var statusSubscribers = [];
@@ -122,7 +122,7 @@ function stopKeepAlive() {
 var SS_REGISTER = 'luna://com.webos.service.tvpower/power/registerScreenSaverRequest';
 var SS_RESPONSE = 'luna://com.webos.service.tvpower/power/responseScreenSaverRequest';
 var SS_TURNON = 'luna://com.webos.service.tvpower/power/turnOnScreen';
-var SS_CLIENT = 'com.sendspin.cinema.service';
+var SS_CLIENT = 'com.sendspin.webos.service';
 var screenSaverSub = null;
 
 function startScreenSaverGuard() {
@@ -154,6 +154,50 @@ function setKeepAwake(on) {
   return state.keepAwake;
 }
 
+/* ------------------------------------------------------ boot autostart */
+/* Without this the daemon only becomes resident once the app is opened (it grabs
+ * the keep-alive then). To survive a reboot we register a persistent ActivityManager
+ * activity with a `boot` trigger that relaunches the service. NOTE: autostart for
+ * unprivileged dev-mode services is firmware-dependent — wrapped in try/catch and
+ * must be verified on hardware across a real power cycle. */
+var BOOT_ACTIVITY = SERVICE_ID + '.boot';
+var bootActivityId = null;
+
+function setBootOnStart(on) {
+  state.bootOnStart = !!on;
+  savePersist();
+  if (state.bootOnStart) { createBootActivity(); } else { removeBootActivity(); }
+  pushStatus();
+  return state.bootOnStart;
+}
+
+function createBootActivity() {
+  try {
+    service.call('luna://com.webos.service.activitymanager/create', {
+      activity: {
+        name: BOOT_ACTIVITY,
+        description: 'Relaunch Sendspin daemon at boot',
+        type: { persist: true, explicit: true, continuous: true },
+        requirements: { boot: true },
+        callback: { method: 'luna://' + SERVICE_ID + '/status', params: {} }
+      },
+      start: true, replace: true, subscribe: false
+    }, function (m) {
+      var p = (m && m.payload) || {};
+      if (p.activityId != null) { bootActivityId = p.activityId; }
+      dbg('boot activity create -> ' + JSON.stringify(p));
+    });
+  } catch (e) { dbg('createBootActivity failed ' + e); }
+}
+
+function removeBootActivity() {
+  try {
+    var params = bootActivityId != null ? { activityId: bootActivityId } : { activityName: BOOT_ACTIVITY };
+    service.call('luna://com.webos.service.activitymanager/cancel', params, function () {});
+    bootActivityId = null;
+  } catch (e) { dbg('removeBootActivity failed ' + e); }
+}
+
 function snapshot() {
   return {
     status: state.status,
@@ -163,6 +207,9 @@ function snapshot() {
     bootOnStart: state.bootOnStart,
     defaultVolume: state.defaultVolume,
     keepAwake: state.keepAwake,
+    configPin: state.configPin,      // shown on the TV; required by the LAN page
+    retrying: state.retrying,
+    nextRetryMs: state.nextRetryMs,
     track: state.track,
     error: state.error,
     connected: !!(player && player.isConnected),
@@ -203,14 +250,7 @@ function makeSink(format) {
 
 /* ---------------------------------------------------- Music Assistant player */
 
-function buildBaseUrl(server) {
-  // Accept "1.2.3.4", "1.2.3.4:8927", "http://host", "ws://host:port".
-  var raw = server.indexOf('://') >= 0 ? server : 'http://' + server;
-  var u = new URL(raw);
-  var proto = (u.protocol === 'https:' || u.protocol === 'wss:') ? 'https:' : 'http:';
-  var port = u.port || String(MA_SENDSPIN_PORT);
-  return proto + '//' + u.hostname + ':' + port;
-}
+function buildBaseUrl(server) { return util.buildBaseUrl(server, MA_SENDSPIN_PORT); }
 
 function onCoreState(s) {
   if (s.serverState && s.serverState.metadata) {
@@ -226,8 +266,45 @@ function onCoreState(s) {
   if (s.groupState && s.groupState.playback_state) {
     state.status = (s.groupState.playback_state === 'playing') ? 'playing' : 'paused';
   }
+  // A live connection means any pending reconnect backoff can be reset.
+  if (player && player.isConnected) { clearReconnect(); }
   dbg('onCoreState pb=' + (s.groupState && s.groupState.playback_state) + ' isConnected=' + !!(player && player.isConnected));
   pushStatus();
+}
+
+/* ------------------------------------------------------ reconnect backoff */
+/* The WebSocket to MA can drop (server restart, network blip). Rather than sit in
+ * an error state until the user re-saves, retry with capped exponential backoff,
+ * and surface the pending retry in status so the UIs can show it. */
+var RECONNECT_BASE = 2000, RECONNECT_MAX = 60000;
+var reconnectTimer = null, reconnectDelay = RECONNECT_BASE;
+
+// Cancel a pending retry without touching the backoff delay (used when a connect
+// is starting for another reason, so we don't fire two connects at once).
+function cancelReconnectTimer() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
+function scheduleReconnect(reason) {
+  if (!state.server || reconnectTimer) { return; }
+  state.retrying = true;
+  state.nextRetryMs = reconnectDelay;
+  dbg('reconnect in ' + reconnectDelay + 'ms (' + reason + ')');
+  pushStatus();
+  var delay = reconnectDelay;
+  reconnectDelay = Math.min(RECONNECT_MAX, reconnectDelay * 2); // grow for next time
+  reconnectTimer = setTimeout(function () {
+    reconnectTimer = null;
+    if (state.server) { connect(); }
+  }, delay);
+}
+
+// Full reset: cancel any retry AND drop the backoff back to base. Called on a
+// successful connection and on user-initiated (re)configuration.
+function clearReconnect() {
+  cancelReconnectTimer();
+  reconnectDelay = RECONNECT_BASE;
+  if (state.retrying) { state.retrying = false; state.nextRetryMs = null; }
 }
 
 // Monotonic connect generation. Every connect() bumps it; any async work (login,
@@ -259,13 +336,17 @@ function startPlayer(baseUrl, authToken, gen) {
   dbg('startPlayer connecting gen=' + gen + ' to ' + baseUrl);
   player.connect()
     .then(function () { dbg('player.connect() resolved isConnected=' + thisPlayer.isConnected); })
-    .catch(function (e) { dbg('player.connect() rejected ' + (e && (e.message || e))); if (thisPlayer === player) { setStatus('error', 'connect ' + baseUrl + ': ' + e); } });
+    .catch(function (e) {
+      dbg('player.connect() rejected ' + (e && (e.message || e)));
+      if (thisPlayer === player) { setStatus('error', 'connect ' + baseUrl + ': ' + e); scheduleReconnect('connect failed'); }
+    });
 }
 
 function connect() {
   var gen = ++connectGen;
+  cancelReconnectTimer();                // a connect is starting; don't double-fire
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
-  if (!state.server) { setStatus('idle'); return; } // keep-alive stays (LAN config server)
+  if (!state.server) { clearReconnect(); setStatus('idle'); return; } // keep-alive stays (LAN config server)
   var baseUrl;
   try { baseUrl = buildBaseUrl(state.server); }
   catch (e) { setStatus('error', 'bad server "' + state.server + '": ' + e); return; }
@@ -277,7 +358,7 @@ function connect() {
     var hostPort = new URL(baseUrl).host;
     maLogin.getToken(hostPort, state.username, state.password, function (err, token) {
       if (gen !== connectGen) { dbg('login superseded gen=' + gen + ' cur=' + connectGen); return; }
-      if (err) { setStatus('error', 'login: ' + (err.message || err)); return; }
+      if (err) { setStatus('error', 'login: ' + (err.message || err)); scheduleReconnect('login failed'); return; }
       startPlayer(baseUrl, token, gen);
     });
   } else {
@@ -301,7 +382,8 @@ function savePersist() {
     playerName: state.playerName,
     bootOnStart: state.bootOnStart,
     defaultVolume: state.defaultVolume,
-    keepAwake: state.keepAwake
+    keepAwake: state.keepAwake,
+    configPin: state.configPin
   });
 }
 
@@ -314,10 +396,12 @@ function applyConfig(p) {
     if (dv !== null) { state.defaultVolume = dv; }
   }
   if (p.keepAwake !== undefined) { setKeepAwake(p.keepAwake); }
+  if (p.bootOnStart !== undefined) { setBootOnStart(p.bootOnStart); }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
   if (p.password !== undefined) { state.password = p.password || null; }
   savePersist();   // survive app reinstall / reboot
+  clearReconnect(); // a fresh user-initiated config resets the backoff
   connect();
   return snapshot();
 }
@@ -349,11 +433,8 @@ service.register('setKeepAwake', function (msg) {
 });
 
 service.register('setBootOnStart', function (msg) {
-  state.bootOnStart = !!(msg.payload && msg.payload.bootOnStart);
-  savePersist();
-  // TODO Phase 5: register/unregister a bootd activity per this flag.
-  pushStatus();
-  msg.respond({ returnValue: true, bootOnStart: state.bootOnStart });
+  var on = setBootOnStart(!!(msg.payload && msg.payload.bootOnStart));
+  msg.respond({ returnValue: true, bootOnStart: on, state: snapshot() });
 });
 
 service.register('play', function (msg) {
@@ -385,6 +466,7 @@ service.register('previous', function (msg) {
 service.register('disconnect', function (msg) {
   state.server = null;
   savePersist();                         // forget the server across reinstall/reboot too
+  clearReconnect();                      // stop any pending retry
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
   setStatus('idle');                     // keep-alive stays so the LAN config UI lives on
   msg.respond({ returnValue: true, state: snapshot() });
@@ -405,7 +487,9 @@ configHttp.start(CONFIG_HTTP_PORT, {
   snapshot: snapshot,
   discover: function (cb) { mdns.discover(3000, cb); }, // config-http calls discover(cb)
   applyConfig: applyConfig,
-  setKeepAwake: setKeepAwake
+  setKeepAwake: setKeepAwake,
+  setBootOnStart: setBootOnStart,
+  getPin: function () { return state.configPin; }
 });
 startKeepAlive();
 startScreenSaverGuard();
@@ -414,15 +498,23 @@ startScreenSaverGuard();
  * and reconnect on our own — no need to wait for the app to re-push it. */
 (function restorePersisted() {
   var saved = persist.load();
-  if (!saved) { dbg('no persisted config'); return; }
-  if (saved.playerName) { state.playerName = saved.playerName; }
-  if (typeof saved.bootOnStart === 'boolean') { state.bootOnStart = saved.bootOnStart; }
-  if (saved.defaultVolume !== undefined) { var sv = clampVol(saved.defaultVolume); if (sv !== null) { state.defaultVolume = sv; } }
-  if (typeof saved.keepAwake === 'boolean') { state.keepAwake = saved.keepAwake; }
-  state.server = saved.server || null;
-  state.username = saved.username || null;
-  state.password = saved.password || null;
-  dbg('restored persisted config server=' + state.server + ' (' + persist.path() + ')');
+  if (saved) {
+    if (saved.playerName) { state.playerName = saved.playerName; }
+    if (typeof saved.bootOnStart === 'boolean') { state.bootOnStart = saved.bootOnStart; }
+    if (saved.defaultVolume !== undefined) { var sv = clampVol(saved.defaultVolume); if (sv !== null) { state.defaultVolume = sv; } }
+    if (typeof saved.keepAwake === 'boolean') { state.keepAwake = saved.keepAwake; }
+    if (saved.configPin) { state.configPin = String(saved.configPin); }
+    state.server = saved.server || null;
+    state.username = saved.username || null;
+    state.password = saved.password || null;
+    dbg('restored persisted config server=' + state.server + ' (' + persist.path() + ')');
+  } else {
+    dbg('no persisted config');
+  }
+  // Generate a stable LAN-config PIN once, then persist it so it doesn't churn.
+  if (!state.configPin) { state.configPin = util.makePin(); savePersist(); }
+  // Honor the boot-autostart flag (registers/cancels the boot activity).
+  if (state.bootOnStart) { createBootActivity(); } else { removeBootActivity(); }
   if (state.server) { connect(); }
 })();
 

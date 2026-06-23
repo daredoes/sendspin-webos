@@ -13,7 +13,9 @@
  *   snapshot:   function() -> state object,
  *   discover:   function(cb(err, servers)),
  *   applyConfig:function({server, username, password, playerName}) -> state object,
- *   setKeepAwake:function(bool) -> bool
+ *   setKeepAwake:function(bool) -> bool,
+ *   setBootOnStart:function(bool) -> bool,
+ *   getPin:function() -> string|null   (writes require this PIN when set)
  * }
  * Returns the http.Server (or null if it could not bind).
  */
@@ -29,6 +31,16 @@ function readBody(req, cb) {
   var data = '';
   req.on('data', function (c) { data += c; if (data.length > 1e6) { req.destroy(); } });
   req.on('end', function () { var j = null; try { j = JSON.parse(data || '{}'); } catch (e) {} cb(j); });
+}
+
+// Gate write endpoints behind the PIN shown on the TV. Accept it from a header or
+// the JSON body. If the service has no PIN set, writes are open (no regression for
+// older setups). Reads (status/discover/page) stay open by design.
+function pinOk(handlers, req, body) {
+  var want = handlers.getPin && handlers.getPin();
+  if (!want) { return true; }
+  var got = req.headers['x-sendspin-pin'] || (body && body.pin);
+  return String(got || '') === String(want);
 }
 
 function start(port, handlers) {
@@ -52,6 +64,7 @@ function start(port, handlers) {
     }
     if (req.method === 'POST' && url === '/api/config') {
       readBody(req, function (body) {
+        if (!pinOk(handlers, req, body)) { send(res, 403, { error: 'wrong PIN (see the TV screen)' }); return; }
         if (!body || !body.server) { send(res, 400, { error: 'server is required' }); return; }
         var state = handlers.applyConfig({
           server: body.server,
@@ -59,7 +72,8 @@ function start(port, handlers) {
           password: body.password || '',
           playerName: body.playerName || '',
           defaultVolume: body.defaultVolume,
-          keepAwake: body.keepAwake
+          keepAwake: body.keepAwake,
+          bootOnStart: body.bootOnStart
         });
         send(res, 200, { state: state });
       });
@@ -69,8 +83,18 @@ function start(port, handlers) {
     // instantly, even before a server is configured.
     if (req.method === 'POST' && url === '/api/keepawake') {
       readBody(req, function (body) {
+        if (!pinOk(handlers, req, body)) { send(res, 403, { error: 'wrong PIN' }); return; }
         var on = handlers.setKeepAwake(!!(body && body.keepAwake));
         send(res, 200, { keepAwake: on });
+      });
+      return;
+    }
+    // Toggle start-on-boot.
+    if (req.method === 'POST' && url === '/api/bootonstart') {
+      readBody(req, function (body) {
+        if (!pinOk(handlers, req, body)) { send(res, 403, { error: 'wrong PIN' }); return; }
+        var on = handlers.setBootOnStart(!!(body && body.bootOnStart));
+        send(res, 200, { bootOnStart: on });
       });
       return;
     }
@@ -116,6 +140,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '</style></head><body><div class="wrap">' +
 '<h1>Sendspin Cinema</h1><p class="sub">Configure this TV player from your computer.</p>' +
 '<div class="pill" id="conn">…</div>' +
+'<label>PIN (shown on the TV screen)</label><input id="pin" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off">' +
 '<button class="scan" id="scanBtn" type="button">Scan for Music Assistant servers</button>' +
 '<div id="servers"></div>' +
 '<label>Server URL or IP</label><div class="row">' +
@@ -127,19 +152,28 @@ var PAGE = '<!DOCTYPE html>\n' +
 '<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="70">' +
 '<label class="check"><input type="checkbox" id="keepAwake">' +
 '<span class="t">Keep TV awake<small>Block the screensaver so the TV stays on while this player runs. Applies immediately.</small></span></label>' +
+'<label class="check"><input type="checkbox" id="bootOnStart">' +
+'<span class="t">Start on boot<small>Keep the player running after the TV restarts (best-effort; verify on your TV).</small></span></label>' +
 '<button class="primary" id="saveBtn" type="button">Save &amp; Connect</button>' +
 '<div id="msg"></div></div><script>' +
 'function $(i){return document.getElementById(i)}' +
 'function setMsg(t,c){var m=$("msg");m.textContent=t;m.className=c||""}' +
+'function pin(){return $("pin").value.trim()}' +
 'function refresh(){fetch("/api/status").then(function(r){return r.json()}).then(function(d){var s=d.state||{};' +
-'$("conn").textContent=(s.connected?"Connected":(s.status||"idle"))+(s.error?(" — "+s.error):"");' +
+'$("conn").textContent=(s.connected?"Connected":(s.status||"idle"))+(s.retrying?(" — retrying in "+Math.round((s.nextRetryMs||0)/1000)+"s"):(s.error?(" — "+s.error):""));' +
 'if(s.server&&!$("host").value)$("host").value=s.server;if(s.username&&!$("user").value)$("user").value=s.username;' +
 'if(s.playerName&&!$("name").value)$("name").value=s.playerName;' +
 'if(s.defaultVolume!=null&&$("vol").value==="")$("vol").value=s.defaultVolume;' +
-'if(s.keepAwake!=null&&document.activeElement!==$("keepAwake"))$("keepAwake").checked=!!s.keepAwake}).catch(function(){})}' +
+'if(s.keepAwake!=null&&document.activeElement!==$("keepAwake"))$("keepAwake").checked=!!s.keepAwake;' +
+'if(s.bootOnStart!=null&&document.activeElement!==$("bootOnStart"))$("bootOnStart").checked=!!s.bootOnStart}).catch(function(){})}' +
 '$("keepAwake").onchange=function(){fetch("/api/keepawake",{method:"POST",headers:{"Content-Type":"application/json"},' +
-'body:JSON.stringify({keepAwake:$("keepAwake").checked})}).then(function(r){return r.json()}).then(function(d){' +
+'body:JSON.stringify({keepAwake:$("keepAwake").checked,pin:pin()})}).then(function(r){return r.json()}).then(function(d){' +
+'if(d.error){setMsg("Error: "+d.error,"err");$("keepAwake").checked=!$("keepAwake").checked;return}' +
 'setMsg(d.keepAwake?"Keep-awake on — screensaver blocked.":"Keep-awake off.","ok")}).catch(function(e){setMsg("Failed: "+e,"err")})};' +
+'$("bootOnStart").onchange=function(){fetch("/api/bootonstart",{method:"POST",headers:{"Content-Type":"application/json"},' +
+'body:JSON.stringify({bootOnStart:$("bootOnStart").checked,pin:pin()})}).then(function(r){return r.json()}).then(function(d){' +
+'if(d.error){setMsg("Error: "+d.error,"err");$("bootOnStart").checked=!$("bootOnStart").checked;return}' +
+'setMsg(d.bootOnStart?"Start-on-boot on.":"Start-on-boot off.","ok")}).catch(function(e){setMsg("Failed: "+e,"err")})};' +
 '$("scanBtn").onclick=function(){setMsg("Scanning…");$("scanBtn").disabled=true;' +
 'fetch("/api/discover").then(function(r){return r.json()}).then(function(d){$("scanBtn").disabled=false;' +
 'var box=$("servers");box.innerHTML="";var list=d.servers||[];if(!list.length){setMsg("No servers found. Enter the address manually.","err");return}' +
@@ -150,7 +184,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '$("saveBtn").onclick=function(){var host=$("host").value.trim();if(!host){setMsg("Enter a server URL or IP","err");return}' +
 'var server=host;var port=$("port").value.trim();if(port&&!/:[0-9]+($|\\/)/.test(host.replace(/^\\w+:\\/\\//,"")))server=host.replace(/\\/+$/,"")+":"+port;' +
 'setMsg("Saving…");fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({' +
-'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV",defaultVolume:$("vol").value.trim(),keepAwake:$("keepAwake").checked})})' +
+'server:server,username:$("user").value.trim(),password:$("pass").value,playerName:$("name").value.trim()||"Cinema TV",defaultVolume:$("vol").value.trim(),keepAwake:$("keepAwake").checked,bootOnStart:$("bootOnStart").checked,pin:pin()})})' +
 '.then(function(r){return r.json()}).then(function(d){if(d.error){setMsg("Error: "+d.error,"err");return}' +
 'setMsg("Saved. Connecting to Music Assistant…","ok");setTimeout(refresh,1500)}).catch(function(e){setMsg("Save failed: "+e,"err")})};' +
 'refresh();setInterval(refresh,4000);</script></body></html>';

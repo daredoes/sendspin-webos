@@ -223,6 +223,13 @@
                     <span>Block the screensaver so the TV stays on while this app is open</span>
                 </span>
             </div>
+            <div class="srv-item toggle-item" id="boot-toggle" tabindex="0" onclick="toggleBootOnStart()">
+                <span class="toggle-box" id="boot-box">☐</span>
+                <span class="toggle-label">
+                    <b>Start on boot</b>
+                    <span>Keep the player running after the TV restarts (best-effort)</span>
+                </span>
+            </div>
             <div class="actions">
                 <button class="action-btn primary" id="save-btn" onclick="saveSetup()">Save &amp; Connect</button>
                 <button class="action-btn" id="cancel-btn" onclick="closeSettings()" style="display:none">Cancel</button>
@@ -236,7 +243,8 @@
 
     <div class="cover-wrapper">
         <div id="loader" style="font-size: 6rem; display: flex; justify-content: center; align-items: center; height: 100%;">💿</div>
-        <img id="cover-art" style="width:100%; height:100%; object-fit:cover; display:none;" crossorigin="anonymous">
+        <img id="cover-art" style="width:100%; height:100%; object-fit:cover; display:none;" crossorigin="anonymous"
+             onerror="this.style.display='none';document.getElementById('loader').style.display='flex';">
     </div>
 
     <div class="info">
@@ -264,11 +272,11 @@
     <script>
         // ----------------------------------------------------------- Luna bridge
         // This UI is a thin client of the background daemon
-        // (com.sendspin.cinema.service): it never talks to Music Assistant
+        // (com.sendspin.webos.service): it never talks to Music Assistant
         // directly. The service holds the persistent, mixed-audio connection and
         // owns volume (stream-only, see service). We just push config + transport
         // commands and render the status it subscribes us to.
-        var SERVICE = 'luna://com.sendspin.cinema.service/';
+        var SERVICE = 'luna://com.sendspin.webos.service/';
         var Bridge = window.PalmServiceBridge || window.webOSServiceBridge || null;
 
         function lunaCall(method, params, onResult) {
@@ -309,6 +317,22 @@
             var on = !keepAwakeEnabled;
             renderKeepAwake(on);                       // optimistic; status will confirm
             lunaCall('setKeepAwake', { keepAwake: on });
+        };
+
+        // Start-on-boot: another thin controller of a service flag. The service
+        // registers a boot activity so the daemon comes back after a power cycle.
+        var bootOnStartEnabled = false;
+        function renderBootOnStart(on) {
+            bootOnStartEnabled = !!on;
+            var t = document.getElementById('boot-toggle');
+            var box = document.getElementById('boot-box');
+            if (t) { t.classList.toggle('on', bootOnStartEnabled); }
+            if (box) { box.textContent = bootOnStartEnabled ? '☑' : '☐'; }
+        }
+        window.toggleBootOnStart = function () {
+            var on = !bootOnStartEnabled;
+            renderBootOnStart(on);
+            lunaCall('setBootOnStart', { bootOnStart: on });
         };
 
         // --------------------------------------------------------------- elements
@@ -538,9 +562,10 @@
             if (!st) { return; }
             lastStatus = st;
             if (st.keepAwake != null) { renderKeepAwake(st.keepAwake); }
+            if (st.bootOnStart != null) { renderBootOnStart(st.bootOnStart); }
             if (st.configUrl) {
                 var lu = document.getElementById('lan-url');
-                if (lu) { lu.textContent = st.configUrl; }
+                if (lu) { lu.textContent = st.configUrl + (st.configPin ? ('  (PIN ' + st.configPin + ')') : ''); }
             }
 
             // If the setup overlay was auto-shown because nothing was configured and
@@ -553,7 +578,8 @@
             var host = serverHost(st.server);
             var meta = CONN[st.status] || CONN.idle;
             connPill.className = (st.connected ? 'ok' : meta.cls);
-            connText.textContent = st.error ? ('Error: ' + st.error).slice(0, 60)
+            connText.textContent = st.retrying ? ('Reconnecting in ' + Math.round((st.nextRetryMs || 0) / 1000) + 's · ' + host)
+                                 : st.error ? ('Error: ' + st.error).slice(0, 60)
                                  : st.connected ? ('Connected · ' + host)
                                  : host ? (meta.text + ' · ' + host)
                                  : meta.text;

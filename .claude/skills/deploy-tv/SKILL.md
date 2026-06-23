@@ -9,7 +9,7 @@ One command does everything (build → copy → install → verify):
 
 ```sh
 scripts/deploy-tv.sh [HOST] [PASSWORD]
-# defaults: HOST=192.168.1.32  PASSWORD=alpine  APP_ID=com.sendspin.cinema
+# defaults: HOST=192.168.1.32  PASSWORD=alpine  APP_ID=com.sendspin.webos
 # env: TV_HOST, TV_PASS, APP_ID, SKIP_BUILD=1 (reuse existing dist/*.ipk)
 ```
 
@@ -32,14 +32,14 @@ service instead — reliable, no key setup.
 - **Copy the IPK to the TV first.** `dev/install` reads `ipkUrl` from the TV
   filesystem (`scp` to `/media/developer/`), not from the host.
 - **Verify by size/marker.** Installed app lives at
-  `/media/developer/apps/usr/palm/applications/com.sendspin.cinema/`. A stale
+  `/media/developer/apps/usr/palm/applications/com.sendspin.webos/`. A stale
   install leaves the old `index.html` size; `grep -c <marker>` confirms the new
   code landed. Success state in the stream is `"state": "installed"`.
 
 ## Manual fallback
 
 ```sh
-H=192.168.1.32; P=alpine; A=com.sendspin.cinema
+H=192.168.1.32; P=alpine; A=com.sendspin.webos
 S="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 ./package-ipk.sh
 sshpass -p $P scp $S dist/*.ipk root@$H:/media/developer/x.ipk

@@ -1,0 +1,18 @@
+{
+  "name": "sendspin-webos",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Sendspin webOS daemon — Music Assistant background audio player for LG webOS",
+  "scripts": {
+    "package": "./package-ipk.sh",
+    "deploy": "./scripts/deploy-tv.sh",
+    "uninstall": "./scripts/uninstall-tv.sh",
+    "lint": "eslint --no-eslintrc -c .eslintrc.json \"services/com.sendspin.webos.service/service.js\" \"services/com.sendspin.webos.service/config-http.js\" \"services/com.sendspin.webos.service/gst-sink.js\" \"services/com.sendspin.webos.service/ma-login.js\" \"services/com.sendspin.webos.service/mdns-discover.js\" \"services/com.sendspin.webos.service/node-env.js\" \"services/com.sendspin.webos.service/persist.js\" \"services/com.sendspin.webos.service/util.js\"",
+    "test": "node --test test/*.test.js",
+    "check:ids": "./scripts/check-ids.sh",
+    "ci": "npm run check:ids && npm run lint && npm test"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}

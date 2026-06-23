@@ -1,6 +1,6 @@
 {
-  "name": "com.sendspin.cinema.service",
-  "version": "1.0.0",
+  "name": "com.sendspin.webos.service",
+  "version": "1.0.1",
   "description": "Sendspin Cinema background audio daemon (Music Assistant client + gstreamer sink)",
   "main": "service.js",
   "engines": {

@@ -1,3 +1,4 @@
 *.ipk
 .ipk-stage/
 dist/
+node_modules/

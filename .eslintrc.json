@@ -1,0 +1,13 @@
+{
+  "root": true,
+  "env": { "node": true },
+  "parserOptions": { "ecmaVersion": 2018, "sourceType": "script" },
+  "extends": "eslint:recommended",
+  "rules": {
+    "no-unused-vars": "off",
+    "no-empty": "off",
+    "no-cond-assign": "off",
+    "no-control-regex": "off",
+    "no-constant-condition": ["error", { "checkLoops": false }]
+  }
+}

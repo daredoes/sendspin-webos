@@ -1,6 +1,6 @@
 #!/bin/sh
 # package-ipk.sh — build a single webOS IPK containing the Sendspin Cinema app
-# AND the background audio daemon service (com.sendspin.cinema.service).
+# AND the background audio daemon service (com.sendspin.webos.service).
 #
 # Stages clean app/ and service/ trees (so dev/build/test files, docs, native/,
 # and the repo layout don't leak into the package), then runs ares-package.
@@ -8,7 +8,7 @@
 # Requires a host with ares-cli + node/npx. Run from the repo root.
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SVC="$ROOT/services/com.sendspin.cinema.service"
+SVC="$ROOT/services/com.sendspin.webos.service"
 STAGE="$ROOT/.ipk-stage"
 DIST="$ROOT/dist"
 
@@ -43,8 +43,15 @@ cp "$SVC/package.json" \
    "$SVC/mdns-discover.js" \
    "$SVC/config-http.js" \
    "$SVC/persist.js" \
+   "$SVC/util.js" \
    "$STAGE/service/"
 cp -R "$SVC/node_modules/ws" "$STAGE/service/node_modules/"
+
+# 3b. Single version source: stamp the staged service package.json with the app's
+#     version (appinfo.json) so the two can never drift in the shipped IPK.
+APP_VER="$(node -e "process.stdout.write(require('$ROOT/appinfo.json').version)")"
+node -e "var fs=require('fs');var p='$STAGE/service/package.json';var j=JSON.parse(fs.readFileSync(p,'utf8'));j.version='$APP_VER';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+echo "[pkg] service version stamped to $APP_VER (from appinfo.json)"
 
 # 4. Validate, then package both into one IPK.
 echo "[pkg] validating staged app + service"

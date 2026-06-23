@@ -17,7 +17,7 @@ isn't in the foreground**.
 
 ## ✨ Features
 
-* **Background audio daemon.** A webOS JS Service (`com.sendspin.cinema.service`) holds
+* **Background audio daemon.** A webOS JS Service (`com.sendspin.webos.service`) holds
   a single, authenticated WebSocket to Music Assistant and stays resident via a
   keep-alive activity — playback and connection survive the UI being backgrounded.
 * **Audio mixed with live TV.** Audio is decoded **on-device with gstreamer**
@@ -54,7 +54,7 @@ flowchart TD
     subgraph TV["LG webOS TV"]
         UI["index.html — thin UI<br/>(D-pad nav, media keys,<br/>keep-awake checkbox)"]
         WEB["LAN config page<br/>http://&lt;tv&gt;:3917<br/>(+ mDNS scan)"]
-        SVC["com.sendspin.cinema.service<br/>(resident JS daemon)"]
+        SVC["com.sendspin.webos.service<br/>(resident JS daemon)"]
         GST["gstreamer → pulsesink"]
         SS["tvpower screensaver veto<br/>(keep-awake)"]
         PERSIST["/media/internal<br/>persisted config"]
@@ -77,7 +77,7 @@ flowchart TD
 | Path | What it is |
 | --- | --- |
 | `index.html` | The cinema UI (thin Luna client). |
-| `services/com.sendspin.cinema.service/` | Background daemon: MA client (`sendspin-core.js`), gstreamer sink (`gst-sink.js`), LAN config server (`config-http.js`), mDNS discovery (`mdns-discover.js`), persistence (`persist.js`). |
+| `services/com.sendspin.webos.service/` | Background daemon: MA client (`sendspin-core.js`), gstreamer sink (`gst-sink.js`), LAN config server (`config-http.js`), mDNS discovery (`mdns-discover.js`), persistence (`persist.js`). |
 | `native/audio-helper/` | Phase-1 research spike (C/PulseAudio) that proved background audio mixes with live HDMI. Not shipped — production uses gstreamer. |
 | `package-ipk.sh` | Builds a **single IPK** containing both the app and the service. |
 | `scripts/deploy-tv.sh` | One-command build → copy → install over root SSH (see below). |
@@ -99,7 +99,7 @@ This is an unofficial app, installed via LG **Developer Mode**.
 ### Build the IPK
 ```bash
 ./package-ipk.sh
-# -> dist/com.sendspin.cinema_<version>_all.ipk  (app + service in one package)
+# -> dist/com.sendspin.webos_<version>_all.ipk  (app + service in one package)
 ```
 
 ### Install it
@@ -107,7 +107,7 @@ This is an unofficial app, installed via LG **Developer Mode**.
 **Option A — ares-cli (dev key):**
 ```bash
 ares-setup-device                       # add your TV (IP, port 9922, user 'prisoner')
-ares-install -d <YOUR_DEVICE> dist/com.sendspin.cinema_*.ipk
+ares-install -d <YOUR_DEVICE> dist/com.sendspin.webos_*.ipk
 ```
 
 **Option B — root SSH helper (`scripts/deploy-tv.sh`):**

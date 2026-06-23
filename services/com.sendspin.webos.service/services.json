@@ -1,9 +1,9 @@
 {
-  "id": "com.sendspin.cinema.service",
+  "id": "com.sendspin.webos.service",
   "description": "Sendspin Cinema background audio daemon",
   "services": [
     {
-      "name": "com.sendspin.cinema.service",
+      "name": "com.sendspin.webos.service",
       "description": "Background audio playback + Music Assistant client. Decodes via on-device gstreamer to pulsesink, mixing with live TV/HDMI.",
       "commands": {
         "play": "public",

@@ -1,0 +1,25 @@
+name: CI
+
+# Fast guards that need no TV: ID/version consistency, the ES5/node-8 lint
+# guardrail, and unit/integration tests for the pure logic + config server.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dev deps
+        run: npm install --no-audit --no-fund
+      - name: ID & version consistency
+        run: npm run check:ids
+      - name: Lint (ES5 / node-8 guardrail)
+        run: npm run lint
+      - name: Tests
+        run: npm test
