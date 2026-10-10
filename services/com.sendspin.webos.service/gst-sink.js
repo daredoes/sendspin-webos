@@ -16,14 +16,16 @@
  * — sometimes already inside the *next* track. That made volume changes skip/“change
  * track”. Scaling in node fixes that and keeps the TV's own/master volume untouched.
  *
- * Why two gst processes (not pacat): pacat throws pa_stream_write Invalid argument
- * on this webOS build; the raw-PCM -> pulsesink gst pipeline is the Phase 2-proven
- * sink. `-q` on the decode stage is REQUIRED: without it gst-launch prints status
- * text ("Pipeline is PREROLLING…") onto fd=1 and corrupts the PCM.
+ * The play stage is a second gst-launch into pulsesink where gstreamer has pulsesink
+ * (webOS 6: pacat there throws pa_stream_write Invalid argument). Builds without
+ * pulsesink (webOS 8) play the same PCM through pacat into the same pulseaudio mixer.
+ * `-q` on the decode stage is REQUIRED: without it gst-launch prints status text
+ * ("Pipeline is PREROLLING…") onto fd=1 and corrupts the PCM.
  *
  * Kept separate from service.js so it can be unit-tested on-device. node 8.12 compatible.
  */
-var spawn = require('child_process').spawn;
+var childProcess = require('child_process');
+var spawn = childProcess.spawn;
 
 /* Identifying tag on our pulsesink stream (handy in `pactl list sink-inputs`). */
 var STREAM_TAG = 'sendspin-cinema';
@@ -56,6 +58,27 @@ function playArgs(format) {
           'pulsesink', 'client-name=' + STREAM_TAG, 'stream-properties=props,media.name=' + STREAM_TAG];
 }
 
+// Play stage without pulsesink: the same S16LE PCM (stdin) through pacat.
+function pacatArgs(format) {
+  var rate = format.sample_rate || 48000;
+  var ch = format.channels || 2;
+  return ['--playback', '--format=s16le', '--rate=' + rate, '--channels=' + ch,
+          '--client-name=' + STREAM_TAG, '--stream-name=' + STREAM_TAG];
+}
+
+// Picks the play command once per process: pulsesink when gstreamer has it, else pacat.
+var hasPulsesink = null;
+function playCommand(format) {
+  if (hasPulsesink === null) {
+    try {
+      hasPulsesink = childProcess.spawnSync('gst-inspect-1.0', ['pulsesink'], { stdio: 'ignore', timeout: 5000 }).status === 0;
+    } catch (e) {
+      hasPulsesink = true;
+    }
+  }
+  return hasPulsesink ? { cmd: 'gst-launch-1.0', args: playArgs(format) } : { cmd: 'pacat', args: pacatArgs(format) };
+}
+
 // onEvent(name, detail) optional. names: 'error' | 'exit' | 'write'.
 function GstSink(format, onEvent) {
   this.codec = format.codec;
@@ -69,9 +92,10 @@ function GstSink(format, onEvent) {
 
 GstSink.prototype._spawn = function () {
   var self = this;
-  console.log('Sendspin sink: decode[' + this._format.codec + '] -> gain -> pulsesink');
+  var out = playCommand(this._format);
+  console.log('Sendspin sink: decode[' + this._format.codec + '] -> gain -> ' + out.cmd);
   this.dec = spawn('gst-launch-1.0', decodeArgs(this._format), { stdio: ['pipe', 'pipe', 'inherit'] });
-  this.play = spawn('gst-launch-1.0', playArgs(this._format), { stdio: ['pipe', 'ignore', 'inherit'] });
+  this.play = spawn(out.cmd, out.args, { stdio: ['pipe', 'ignore', 'inherit'] });
 
   this.dec.on('error', function (e) { self._onEvent('error', e); });
   this.play.on('error', function (e) { self._onEvent('error', e); });
@@ -130,4 +154,4 @@ GstSink.prototype.stop = function () {
   }
 };
 
-module.exports = { GstSink: GstSink, decodeArgs: decodeArgs, playArgs: playArgs };
+module.exports = { GstSink: GstSink, decodeArgs: decodeArgs, playArgs: playArgs, pacatArgs: pacatArgs };
