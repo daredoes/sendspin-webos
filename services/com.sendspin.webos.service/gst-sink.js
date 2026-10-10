@@ -62,7 +62,8 @@ function playArgs(format) {
 function pacatArgs(format) {
   var rate = format.sample_rate || 48000;
   var ch = format.channels || 2;
-  return ['--playback', '--format=s16le', '--rate=' + rate, '--channels=' + ch,
+  // pacat buffers ~2 s by default, which delays every volume change by as much.
+  return ['--playback', '--format=s16le', '--rate=' + rate, '--channels=' + ch, '--latency-msec=300',
           '--client-name=' + STREAM_TAG, '--stream-name=' + STREAM_TAG];
 }
 
@@ -135,9 +136,16 @@ GstSink.prototype.write = function (buf) {
 };
 
 // Live volume (0..100) + mute — no respawn, applied in the PCM bridge above.
-GstSink.prototype.setVolume = function (volumePct, muted) {
+// Cubic curve like pulseaudio's own volume scale: a linear gain leaves low settings
+// almost as loud as high ones (6% is only 21 dB below 70%; cubed it is 64 dB below).
+function volumeGain(volumePct) {
   var pct = (typeof volumePct === 'number' && isFinite(volumePct)) ? volumePct : 100;
-  this._gain = Math.max(0, Math.min(1, pct / 100));
+  var v = Math.max(0, Math.min(1, pct / 100));
+  return v * v * v;
+}
+
+GstSink.prototype.setVolume = function (volumePct, muted) {
+  this._gain = volumeGain(volumePct);
   this._muted = !!muted;
 };
 
@@ -154,4 +162,4 @@ GstSink.prototype.stop = function () {
   }
 };
 
-module.exports = { GstSink: GstSink, decodeArgs: decodeArgs, playArgs: playArgs, pacatArgs: pacatArgs };
+module.exports = { GstSink: GstSink, decodeArgs: decodeArgs, playArgs: playArgs, pacatArgs: pacatArgs, volumeGain: volumeGain };
