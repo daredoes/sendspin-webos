@@ -47,7 +47,11 @@ jobs:
       - name: Build IPK
         run: ./package-ipk.sh
 
-      - name: Upload IPK to the release
+      # Homebrew Channel reads apps.json from the latest release as a custom repository.
+      - name: Write Homebrew Channel manifest and repo index
+        run: node scripts/hbc-repo.js "$TAG" dist/*.ipk
+
+      - name: Upload IPK and Homebrew Channel files to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/*.ipk --clobber
+        run: gh release upload "$TAG" dist/*.ipk dist/webosbrew.manifest.json dist/apps.json --clobber

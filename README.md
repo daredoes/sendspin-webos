@@ -87,9 +87,36 @@ flowchart TD
 
 ## 🚀 Installation
 
-This is an unofficial app, installed via LG **Developer Mode**.
+This is an unofficial app. On a rooted TV the easiest path is the Homebrew Channel; otherwise
+build it and install via LG **Developer Mode**.
 
-### Prerequisites
+### Homebrew Channel (rooted TVs)
+
+Each GitHub release publishes a Homebrew Channel repository index next to the IPK.
+
+1. In Homebrew Channel, open **Settings** and add this extra repository:
+   `https://github.com/daredoes/sendspin-webos/releases/latest/download/apps.json`
+2. Find **Sendspin Cinema** in the app list and install it. Updates arrive the same way
+   when a new release is published.
+
+### Headless speaker setup (screen off)
+
+The background service keeps playing with the panel off and while the app is closed. To use
+a TV as a speaker without the picture:
+
+- Turn off **Keep TV awake** in the app or on the LAN config page. When it is on, the service
+  turns the panel back on every time webOS blanks it.
+- Blank the panel and keep audio:
+  `luna-send -n 1 luna://com.webos.service.tvpower/power/turnOffScreen '{}'`. From Home
+  Assistant, the `webostv.command` action with
+  `command: com.webos.service.tvpower/power/turnOffScreen` does the same. Any remote button
+  turns the panel back on.
+- Standby (the power button) suspends the TV and drops the network, so the player goes
+  offline. To play from standby, turn on the TV's wake-over-network setting (**Turn on via
+  Wi-Fi** / **Mobile TV On**) and send a Wake-on-LAN packet first. The service resumes on
+  its own after a wake. The TV can ignore a single packet, so resend it until the TV answers.
+
+### Prerequisites (Developer Mode)
 1. Install **Developer Mode** from the LG Content Store and log in; enable **Dev Mode
    Status** and **Key Server**. Note the TV's IP and passphrase.
 2. Install [webOS CLI tools (ares-cli)](https://webostv.developer.lge.com/develop/tools/cli-introduction)
