@@ -17,6 +17,8 @@
         "setPlayerName": "public",
         "setBootOnStart": "public",
         "setKeepAwake": "public",
+        "setWinampScreensaver": "public",
+        "showWinamp": "public",
         "status": "public"
       }
     }

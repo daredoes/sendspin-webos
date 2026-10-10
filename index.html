@@ -38,6 +38,16 @@
         #settings-trigger svg { width: 40px; height: 40px; fill: #fff; opacity: 0.7; }
         #settings-trigger:focus { outline: none; background: var(--accent); box-shadow: 0 0 40px var(--accent); }
         #settings-trigger:focus svg { opacity: 1; }
+        #winamp-trigger {
+            position: fixed; top: -100px; right: 140px; z-index: 4000;
+            height: 80px; padding: 0 24px; cursor: pointer;
+            transition: top 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            background: var(--glass); display: flex; justify-content: center; align-items: center;
+            border-radius: 0 0 25px 25px; border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+            color: #fff; font-size: 26px; font-weight: 700; letter-spacing: 1px; opacity: 0.85;
+        }
+        #winamp-trigger:focus { outline: none; opacity: 1; background: var(--accent); box-shadow: 0 0 40px var(--accent); }
 
         /* Connection pill (top-left) */
         #conn-pill {
@@ -101,6 +111,7 @@
         /* --- UI STATE: SHOW CONTROLS --- */
         body.show-ui #controls-container { bottom: 0; }
         body.show-ui #settings-trigger { top: 0; }
+        body.show-ui #winamp-trigger { top: 0; }
         body.show-ui .progress-wrapper { opacity: 1; transform: translateY(0); }
 
         /* Cinema Effect: Shrink and Blur background */
@@ -177,6 +188,8 @@
 
     <div id="conn-pill"><span id="conn-dot"></span><span id="conn-text">Idle</span></div>
 
+    <div id="winamp-trigger" tabindex="0" onclick="openWinamp()">WINAMP</div>
+
     <div id="settings-trigger" tabindex="0" onclick="openSettings()">
         <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.81,11.69,4.81,12c0,0.31,0.02,0.65,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
     </div>
@@ -221,6 +234,13 @@
                 <span class="toggle-label">
                     <b>Keep TV awake</b>
                     <span>Block the screensaver so the TV stays on while this app is open</span>
+                </span>
+            </div>
+            <div class="srv-item toggle-item" id="winampss-toggle" tabindex="0" onclick="toggleWinampScreensaver()">
+                <span class="toggle-box" id="winampss-box">☐</span>
+                <span class="toggle-label">
+                    <b>Winamp screensaver</b>
+                    <span>While music plays, show the Winamp view instead of the TV screensaver</span>
                 </span>
             </div>
             <div class="srv-item toggle-item" id="boot-toggle" tabindex="0" onclick="toggleBootOnStart()">
@@ -313,6 +333,20 @@
             if (box) { box.textContent = keepAwakeEnabled ? '☑' : '☐'; }
         }
 
+        var winampScreensaverEnabled = false;
+        function renderWinampScreensaver(on) {
+            winampScreensaverEnabled = !!on;
+            var t = document.getElementById('winampss-toggle');
+            var box = document.getElementById('winampss-box');
+            if (t) { t.classList.toggle('on', winampScreensaverEnabled); }
+            if (box) { box.textContent = winampScreensaverEnabled ? '☑' : '☐'; }
+        }
+        window.toggleWinampScreensaver = function () {
+            var on = !winampScreensaverEnabled;
+            renderWinampScreensaver(on);               // optimistic; status will confirm
+            lunaCall('setWinampScreensaver', { winampScreensaver: on });
+        };
+
         window.toggleKeepAwake = function () {
             var on = !keepAwakeEnabled;
             renderKeepAwake(on);                       // optimistic; status will confirm
@@ -404,6 +438,7 @@
             document.getElementById('input-name').value = c.name;
             document.getElementById('input-vol').value = c.vol;
             renderKeepAwake(lastStatus && lastStatus.keepAwake);
+            renderWinampScreensaver(lastStatus && lastStatus.winampScreensaver);
             var configured = hasCfg() || !!(lastStatus && lastStatus.server);
             document.getElementById('cancel-btn').style.display = configured ? 'block' : 'none';
             setupStatus.textContent = '';
@@ -562,6 +597,7 @@
             if (!st) { return; }
             lastStatus = st;
             if (st.keepAwake != null) { renderKeepAwake(st.keepAwake); }
+            if (st.winampScreensaver != null) { renderWinampScreensaver(st.winampScreensaver); }
             if (st.bootOnStart != null) { renderBootOnStart(st.bootOnStart); }
             if (st.configUrl) {
                 var lu = document.getElementById('lan-url');
@@ -663,6 +699,7 @@
         // next. showUI() slides the chrome in (the gear lives off-screen until then).
         function npFocusables() {
             return [
+                document.getElementById('winamp-trigger'),
                 document.getElementById('settings-trigger'),
                 document.getElementById('prev-btn'),
                 document.getElementById('play-btn'),
@@ -739,8 +776,38 @@
         document.getElementById('prev-btn').onclick = function () { lunaCall('previous', {}); };
         document.getElementById('next-btn').onclick = function () { lunaCall('next', {}); };
 
+        // ---------------------------------------------------------- winamp view
+        // The Winamp view (winamp.html) is the same thin client in a Webamp skin. The
+        // last view used is remembered, and the app reopens in it once configured.
+        function openWinamp() {
+            try { localStorage.setItem('sendspin_ui', 'winamp'); } catch (e) {}
+            location.href = 'winamp.html';
+        }
+
+        // The service launches the app with { view: 'winamp', screensaver: true } in
+        // place of the TV screensaver; a running app gets the same params on relaunch.
+        function launchParams() {
+            try {
+                var lp = (window.PalmSystem && window.PalmSystem.launchParams) ||
+                         (window.webOSSystem && window.webOSSystem.launchParams) || '{}';
+                return typeof lp === 'string' ? JSON.parse(lp || '{}') : lp;
+            } catch (e) { return {}; }
+        }
+        function routeLaunch(lp) {
+            if (lp && lp.view === 'winamp') {
+                location.replace('winamp.html' + (lp.screensaver ? '?screensaver=1' : ''));
+                return true;
+            }
+            return false;
+        }
+        document.addEventListener('webOSRelaunch', function (e) { routeLaunch((e && e.detail) || launchParams()); });
+
         // -------------------------------------------------------------------- init
         (function init() {
+            if (routeLaunch(launchParams())) { return; }
+            var ui = null;
+            try { ui = localStorage.getItem('sendspin_ui'); } catch (e) {}
+            if (ui === 'winamp' && hasCfg()) { location.replace('winamp.html'); return; }
             subscribeStatus();
             if (hasCfg()) {
                 applyConfig(); // re-push saved config so a recycled service reconnects

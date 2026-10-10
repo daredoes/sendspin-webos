@@ -28,6 +28,7 @@ var configHttp = require('./config-http');
 var persist = require('./persist');
 var util = require('./util');
 var os = require('os');
+var path = require('path');
 
 var SERVICE_ID = 'com.sendspin.webos.service';
 var service = new Service(SERVICE_ID);
@@ -72,6 +73,7 @@ var state = {
   bootOnStart: true,
   defaultVolume: 30,       // 0..100 volume applied to a fresh player (until MA sets one)
   keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
+  winampScreensaver: false, // when true, show the Winamp view instead of the screensaver while playing
   configPin: null,         // 4-digit PIN required to change config from the LAN page
   retrying: false,         // true while a reconnect is scheduled after a failure
   nextRetryMs: null,       // backoff delay of the pending reconnect, if any
@@ -132,9 +134,12 @@ function startScreenSaverGuard() {
     screenSaverSub.on('response', function (m) {
       var p = (m && m.payload) || {};
       // Fired when the TV is about to start its screensaver. Respond before it
-      // times out: veto (ack:false) only while keepAwake is on, else allow.
+      // times out: veto (ack:false) while keepAwake is on, or while playing with the
+      // Winamp screensaver on (then show the Winamp view in its place); else allow.
       if (p.state === 'Active' && p.timestamp != null) {
-        service.call(SS_RESPONSE, { clientName: SS_CLIENT, ack: !state.keepAwake, timestamp: p.timestamp }, function () {});
+        var winamp = state.winampScreensaver && state.status === 'playing';
+        service.call(SS_RESPONSE, { clientName: SS_CLIENT, ack: !(state.keepAwake || winamp), timestamp: p.timestamp }, function () {});
+        if (winamp) { launchWinamp(true); }
       }
     });
     screenSaverSub.on('cancel', function () { screenSaverSub = null; });
@@ -143,6 +148,41 @@ function startScreenSaverGuard() {
     console.error('Sendspin: screensaver guard failed', e);
     screenSaverSub = null;
   }
+}
+
+var APP_ID = 'com.sendspin.webos';
+var APP_MGR = 'luna://com.webos.applicationManager/';
+var WINAMP_SCREENSAVER = { view: 'winamp', screensaver: true };
+
+// Open the app in the Winamp view; as a screensaver, any non-media input closes it.
+function launchWinamp(asScreensaver) {
+  service.call(APP_MGR + 'launch',
+    { id: APP_ID, params: asScreensaver ? WINAMP_SCREENSAVER : { view: 'winamp' } },
+    function (m) { dbg('winamp launch -> ' + JSON.stringify(m && m.payload)); });
+}
+
+/* A second home-screen tile for the same app that opens the Winamp screensaver.
+ * applicationManager refuses launch-point calls from this service, so they run as
+ * root through Homebrew Channel's exec. Added only when no such tile exists yet. */
+function ensureWinampLaunchPoint() {
+  var add = JSON.stringify({
+    id: APP_ID,
+    title: 'Winamp Screensaver',
+    icon: path.join(__dirname, '..', '..', 'applications', APP_ID, 'icon.png'),
+    params: WINAMP_SCREENSAVER
+  });
+  var cmd = "luna-send -n 1 luna://com.webos.applicationManager/listLaunchPoints '{}' | grep -q '\"Winamp Screensaver\"'" +
+            " || luna-send -n 1 luna://com.webos.applicationManager/addLaunchPoint '" + add + "'";
+  service.call('luna://org.webosbrew.hbchannel.service/exec', { command: cmd }, function (m) {
+    dbg('winamp launch point -> ' + JSON.stringify(m && m.payload));
+  });
+}
+
+function setWinampScreensaver(on) {
+  state.winampScreensaver = !!on;
+  savePersist();
+  pushStatus();
+  return state.winampScreensaver;
 }
 
 function setKeepAwake(on) {
@@ -207,6 +247,7 @@ function snapshot() {
     bootOnStart: state.bootOnStart,
     defaultVolume: state.defaultVolume,
     keepAwake: state.keepAwake,
+    winampScreensaver: state.winampScreensaver,
     configPin: state.configPin,      // shown on the TV; required by the LAN page
     retrying: state.retrying,
     nextRetryMs: state.nextRetryMs,
@@ -383,6 +424,7 @@ function savePersist() {
     bootOnStart: state.bootOnStart,
     defaultVolume: state.defaultVolume,
     keepAwake: state.keepAwake,
+    winampScreensaver: state.winampScreensaver,
     configPin: state.configPin
   });
 }
@@ -396,6 +438,7 @@ function applyConfig(p) {
     if (dv !== null) { state.defaultVolume = dv; }
   }
   if (p.keepAwake !== undefined) { setKeepAwake(p.keepAwake); }
+  if (p.winampScreensaver !== undefined) { setWinampScreensaver(p.winampScreensaver); }
   if (p.bootOnStart !== undefined) { setBootOnStart(p.bootOnStart); }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
@@ -441,6 +484,19 @@ reg('setPlayerName', function (msg) {
 reg('setKeepAwake', function (msg) {
   var on = setKeepAwake(!!(msg.payload && msg.payload.keepAwake));
   msg.respond({ returnValue: true, keepAwake: on, state: snapshot() });
+});
+
+// Show the Winamp screensaver on demand (e.g. from a remapped remote button).
+// Pass { screensaver: false } for the regular Winamp view.
+reg('showWinamp', function (msg) {
+  var asScreensaver = !(msg.payload && msg.payload.screensaver === false);
+  launchWinamp(asScreensaver);
+  msg.respond({ returnValue: true, screensaver: asScreensaver });
+});
+
+reg('setWinampScreensaver', function (msg) {
+  var on = setWinampScreensaver(!!(msg.payload && msg.payload.winampScreensaver));
+  msg.respond({ returnValue: true, winampScreensaver: on, state: snapshot() });
 });
 
 reg('setBootOnStart', function (msg) {
@@ -504,6 +560,7 @@ configHttp.start(CONFIG_HTTP_PORT, {
 });
 startKeepAlive();
 startScreenSaverGuard();
+ensureWinampLaunchPoint();
 
 /* Standby suspends the TV: this process freezes and the network drops, but the socket
  * to Music Assistant still looks open until TCP gives up, over a minute after resume.
@@ -528,6 +585,7 @@ setInterval(function () {
     if (typeof saved.bootOnStart === 'boolean') { state.bootOnStart = saved.bootOnStart; }
     if (saved.defaultVolume !== undefined) { var sv = clampVol(saved.defaultVolume); if (sv !== null) { state.defaultVolume = sv; } }
     if (typeof saved.keepAwake === 'boolean') { state.keepAwake = saved.keepAwake; }
+    if (typeof saved.winampScreensaver === 'boolean') { state.winampScreensaver = saved.winampScreensaver; }
     if (saved.configPin) { state.configPin = String(saved.configPin); }
     state.server = saved.server || null;
     state.username = saved.username || null;
