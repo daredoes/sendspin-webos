@@ -42,8 +42,15 @@ function makePin() {
   return ('000' + Math.floor(Math.random() * 10000)).slice(-4);
 }
 
+// True when a periodic timer fired more than gapMs after the previous tick, which
+// happens when the process was frozen by a suspend.
+function resumedFromSuspend(prevMs, nowMs, gapMs) {
+  return nowMs - prevMs > gapMs;
+}
+
 module.exports = {
   MA_SENDSPIN_PORT: MA_SENDSPIN_PORT,
+  resumedFromSuspend: resumedFromSuspend,
   clampVol: clampVol,
   buildBaseUrl: buildBaseUrl,
   buildServer: buildServer,

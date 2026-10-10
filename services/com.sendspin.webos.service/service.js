@@ -505,6 +505,20 @@ configHttp.start(CONFIG_HTTP_PORT, {
 startKeepAlive();
 startScreenSaverGuard();
 
+/* Standby suspends the TV: this process freezes and the network drops, but the socket
+ * to Music Assistant still looks open until TCP gives up, over a minute after resume.
+ * A tick that arrives far later than scheduled means the process was suspended, so
+ * reconnect at once. */
+var WAKE_TICK_MS = 5000, WAKE_GAP_MS = 15000, lastWakeTick = Date.now();
+setInterval(function () {
+  var now = Date.now();
+  if (util.resumedFromSuspend(lastWakeTick, now, WAKE_GAP_MS) && state.server) {
+    dbg('resumed after ' + (now - lastWakeTick) + 'ms: reconnecting');
+    connect();
+  }
+  lastWakeTick = now;
+}, WAKE_TICK_MS);
+
 /* Restore config saved on the persistent partition (survives app reinstall/reboot)
  * and reconnect on our own — no need to wait for the app to re-push it. */
 (function restorePersisted() {

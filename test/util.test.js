@@ -36,3 +36,9 @@ test('makePin is a 4-digit string', () => {
     assert.match(pin, /^[0-9]{4}$/);
   }
 });
+
+test('resumedFromSuspend flags a tick that arrives far past its gap', () => {
+  assert.strictEqual(util.resumedFromSuspend(0, 5000, 15000), false);
+  assert.strictEqual(util.resumedFromSuspend(0, 15000, 15000), false);
+  assert.strictEqual(util.resumedFromSuspend(0, 90000, 15000), true);
+});
