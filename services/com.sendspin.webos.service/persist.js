@@ -47,6 +47,15 @@ function load() {
   return null;
 }
 
+// Write via a temp file and rename it over the target. A file left read-only by
+// another uid (an earlier install of the app) cannot be overwritten in place, but a
+// world-writable directory still allows replacing it; the rename is also atomic.
+function writeAtomic(p, data) {
+  var tmp = p + '.tmp';
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, p);
+}
+
 // Persist the config object to the first writable candidate (reusing the loaded
 // path if we have one). Returns true on success.
 function save(obj) {
@@ -58,7 +67,7 @@ function save(obj) {
     if (!p && w) { p = CANDIDATES[i]; }
   }
   if (!p) { return false; }
-  try { fs.writeFileSync(p, JSON.stringify(obj)); chosen = p; return true; }
+  try { writeAtomic(p, JSON.stringify(obj)); chosen = p; return true; }
   catch (e) { return false; }
 }
 
@@ -66,5 +75,6 @@ module.exports = {
   load: load,
   save: save,
   path: function () { return chosen; },
-  probe: function () { return lastProbe; }
+  probe: function () { return lastProbe; },
+  writeAtomic: writeAtomic
 };

@@ -70,7 +70,7 @@ var state = {
   password: null,
   playerName: 'Sendspin Cinema',
   bootOnStart: true,
-  defaultVolume: 70,       // 0..100 volume applied to a fresh player (until MA sets one)
+  defaultVolume: 30,       // 0..100 volume applied to a fresh player (until MA sets one)
   keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
   configPin: null,         // 4-digit PIN required to change config from the LAN page
   retrying: false,         // true while a reconnect is scheduled after a failure

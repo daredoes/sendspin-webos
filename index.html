@@ -214,7 +214,7 @@
             </div>
             <div class="field">
                 <label for="input-vol">Default volume (0&ndash;100)</label>
-                <input type="text" id="input-vol" inputmode="numeric" placeholder="70">
+                <input type="text" id="input-vol" inputmode="numeric" placeholder="30">
             </div>
             <div class="srv-item toggle-item" id="keepawake-toggle" tabindex="0" onclick="toggleKeepAwake()">
                 <span class="toggle-box" id="keepawake-box">☐</span>
@@ -368,7 +368,7 @@
                 user: localStorage.getItem('ma_user') || '',
                 pass: localStorage.getItem('ma_pass') || '',
                 name: localStorage.getItem('ma_name') || 'Cinema TV',
-                vol: localStorage.getItem('ma_vol') || '70'
+                vol: localStorage.getItem('ma_vol') || '30'
             };
         }
         function hasCfg() { return !!localStorage.getItem('ma_host'); }
@@ -432,7 +432,7 @@
             localStorage.setItem('ma_user', user);
             localStorage.setItem('ma_pass', pass);
             localStorage.setItem('ma_name', name);
-            localStorage.setItem('ma_vol', vol || '70');
+            localStorage.setItem('ma_vol', vol || '30');
 
             setupStatus.textContent = 'Connecting…';
             setupStatus.className = '';
@@ -502,7 +502,7 @@
                     server: buildServer(c.host, c.port),
                     username: c.user || '',
                     password: c.pass || '',
-                    defaultVolume: c.vol || '70'
+                    defaultVolume: c.vol || '30'
                 }, function (res) { if (done) done(res); });
             });
         }

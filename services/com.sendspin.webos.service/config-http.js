@@ -149,7 +149,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '<label>Username (optional)</label><input id="user" autocapitalize="off" autocomplete="username">' +
 '<label>Password (optional)</label><input id="pass" type="password" autocomplete="current-password">' +
 '<label>Player name</label><input id="name" placeholder="Cinema TV">' +
-'<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="70">' +
+'<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="30">' +
 '<label class="check"><input type="checkbox" id="keepAwake">' +
 '<span class="t">Keep TV awake<small>Block the screensaver so the TV stays on while this player runs. Applies immediately.</small></span></label>' +
 '<label class="check"><input type="checkbox" id="bootOnStart">' +
