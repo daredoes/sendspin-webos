@@ -99,35 +99,26 @@ Each GitHub release publishes a Homebrew Channel repository index next to the IP
 2. Find **Sendspin Cinema** in the app list and install it. Updates arrive the same way
    when a new release is published.
 
-### Winamp view and screensaver
+### Visualizer screensaver
 
-The **WINAMP** button (top right, next to the gear) switches the now-playing screen to a
-Winamp 2 skin rendered by [Webamp](https://github.com/captbaritone/webamp) (MIT). It is a
-remote for the background service, not a second player: the transport buttons, the
-remote's media keys and ◀ ▶ / OK control Music Assistant, and the track, clock and
-play/pause state follow the service. Volume, seek and EQ stay with Music Assistant. Back
-returns to the cinema view, and the app reopens in whichever view was used last.
+Install [projectM for webOS](https://github.com/daredoes/projectm-webos) (`com.daredoes.projectm`),
+a native MilkDrop-style visualizer that reacts to whatever the TV plays.
 
-**Winamp screensaver** (Settings): while music plays, the service blocks the TV screensaver
-and opens the Winamp view in its place. Any non-media key or a pointer click closes it and
-returns to the previous input; media keys keep controlling playback.
+**Visualizer screensaver** (Settings): while music plays, the service blocks the TV screensaver
+and opens projectM in screensaver mode instead. Any key other than the arrows, or a pointer
+click, closes it and returns to the previous input.
 
-Open the Winamp screensaver on demand:
+Open it on demand:
 
-- **Home screen:** the service adds a **Winamp Screensaver** tile next to the app tile (once,
-  through Homebrew Channel's root `exec`, because webOS refuses launch-point calls from a
-  dev-app service).
-- **Luna:** `luna-send -n 1 luna://com.sendspin.webos.service/showWinamp '{}'`
-  (`{"screensaver":false}` opens the regular Winamp view).
+- **Home screen:** projectM's own tile.
+- **Luna:** `luna-send -n 1 luna://com.sendspin.webos.service/showVisualizer '{}'`
+  (`{"screensaver":false}` opens it as a normal app).
 - **Remote button** with [lginputhook](https://github.com/webosbrew/lginputhook): its `launch`
   action cannot pass parameters, so bind an `exec` action, for example in
   `/home/root/.config/lginputhook/keybinds.json`:
-  `"398": {"action": "exec", "command": "luna-send -n 1 luna://com.sendspin.webos.service/showWinamp '{}'"}`
+  `"398": {"action": "exec", "command": "luna-send -n 1 luna://com.sendspin.webos.service/showVisualizer '{}'"}`
 - **Home Assistant:** `webostv.command` with `command: system.launcher/launch` and
-  `payload: {id: com.sendspin.webos, params: {view: winamp, screensaver: true}}`.
-
-`scripts/vendor-webamp.sh` refreshes `vendor/webamp.bundle.js` from npm and re-emits it for
-the Chromium 79 browser in webOS 6.
+  `payload: {id: com.daredoes.projectm, params: {screensaver: true}}`.
 
 ### Headless speaker setup (screen off)
 

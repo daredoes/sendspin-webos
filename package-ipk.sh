@@ -29,11 +29,7 @@ cp "$ROOT/appinfo.json" \
    "$ROOT/index.html" \
    "$ROOT/Vibrant.min.js" \
    "$ROOT/icon.png" \
-   "$ROOT/winamp.html" \
-   "$ROOT/winamp.js" \
    "$STAGE/app/"
-mkdir -p "$STAGE/app/vendor"
-cp "$ROOT/vendor/webamp.bundle.js" "$STAGE/app/vendor/"
 
 # 3. Stage the service — runtime files + bundled deps only. Explicitly omit
 #    build.sh, build-core.mjs, src/, smoke-test.js, test-real-sink.js, .gitignore.
