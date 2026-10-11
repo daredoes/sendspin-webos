@@ -136,12 +136,13 @@ GstSink.prototype.write = function (buf) {
 };
 
 // Live volume (0..100) + mute — no respawn, applied in the PCM bridge above.
-// Cubic curve like pulseaudio's own volume scale: a linear gain leaves low settings
-// almost as loud as high ones (6% is only 21 dB below 70%; cubed it is 64 dB below).
+// Square curve: a linear gain leaves low settings almost as loud as high ones (6% is
+// only 21 dB below 70%; squared it is 43 dB below), while a cubic one makes most of
+// the low and middle range near-silent on top of the TV's own volume.
 function volumeGain(volumePct) {
   var pct = (typeof volumePct === 'number' && isFinite(volumePct)) ? volumePct : 100;
   var v = Math.max(0, Math.min(1, pct / 100));
-  return v * v * v;
+  return v * v;
 }
 
 GstSink.prototype.setVolume = function (volumePct, muted) {

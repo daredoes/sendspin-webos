@@ -11,12 +11,13 @@ test('pacatArgs plays S16LE PCM at the stream rate and channel count', () => {
   assert.ok(sink.pacatArgs({}).includes('--rate=48000'));
 });
 
-test('volumeGain follows a cubic curve', () => {
+test('volumeGain follows a square curve', () => {
   assert.strictEqual(sink.volumeGain(100), 1);
   assert.strictEqual(sink.volumeGain(0), 0);
-  assert.ok(Math.abs(sink.volumeGain(50) - 0.125) < 1e-9);
+  assert.ok(Math.abs(sink.volumeGain(50) - 0.25) < 1e-9);
   const db = (pct) => 20 * Math.log10(sink.volumeGain(pct));
-  assert.ok(db(70) - db(6) > 60, '6% is far quieter than 70%');
+  assert.ok(db(70) - db(6) > 40, '6% is far quieter than 70%');
+  assert.ok(db(50) > -13, '50% stays audible');
   assert.strictEqual(sink.volumeGain(150), 1);
   assert.strictEqual(sink.volumeGain('x'), 1);
 });
