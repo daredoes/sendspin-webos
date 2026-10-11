@@ -42,3 +42,10 @@ test('resumedFromSuspend flags a tick that arrives far past its gap', () => {
   assert.strictEqual(util.resumedFromSuspend(0, 15000, 15000), false);
   assert.strictEqual(util.resumedFromSuspend(0, 90000, 15000), true);
 });
+
+test('connectStalled flags only an old connect with no socket and no retry', () => {
+  assert.strictEqual(util.connectStalled(false, false, 0, 31000, 30000), true);
+  assert.strictEqual(util.connectStalled(false, false, 0, 20000, 30000), false);
+  assert.strictEqual(util.connectStalled(true, false, 0, 31000, 30000), false);
+  assert.strictEqual(util.connectStalled(false, true, 0, 31000, 30000), false);
+});

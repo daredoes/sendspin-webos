@@ -48,9 +48,16 @@ function resumedFromSuspend(prevMs, nowMs, gapMs) {
   return nowMs - prevMs > gapMs;
 }
 
+// True when a connect started more than stallMs ago has neither produced a live
+// socket nor left a retry pending, so nothing else will ever reconnect.
+function connectStalled(connected, retryPending, startedMs, nowMs, stallMs) {
+  return !connected && !retryPending && nowMs - startedMs > stallMs;
+}
+
 module.exports = {
   MA_SENDSPIN_PORT: MA_SENDSPIN_PORT,
   resumedFromSuspend: resumedFromSuspend,
+  connectStalled: connectStalled,
   clampVol: clampVol,
   buildBaseUrl: buildBaseUrl,
   buildServer: buildServer,

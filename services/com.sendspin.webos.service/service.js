@@ -397,6 +397,7 @@ function clearReconnect() {
 // into a single live player — critical because MA dedups players by client_id, so
 // multiple players sharing our client_id would evict each other and flap.
 var connectGen = 0;
+var connectStartedAt = 0;
 
 function startPlayer(baseUrl, authToken, gen) {
   if (gen !== connectGen) { dbg('startPlayer superseded gen=' + gen + ' cur=' + connectGen); return; }
@@ -431,6 +432,7 @@ function startPlayer(baseUrl, authToken, gen) {
 
 function connect() {
   var gen = ++connectGen;
+  connectStartedAt = Date.now();
   cancelReconnectTimer();                // a connect is starting; don't double-fire
   if (player) { try { player.disconnect(); } catch (e) {} player = null; }
   if (!state.server) { clearReconnect(); setStatus('idle'); return; } // keep-alive stays (LAN config server)
@@ -619,12 +621,16 @@ startTvVolumeWatch();
 /* Standby suspends the TV: this process freezes and the network drops, but the socket
  * to Music Assistant still looks open until TCP gives up, over a minute after resume.
  * A tick that arrives far later than scheduled means the process was suspended, so
- * reconnect at once. */
-var WAKE_TICK_MS = 5000, WAKE_GAP_MS = 15000, lastWakeTick = Date.now();
+ * reconnect at once. The same tick reconnects when a connect stalls: a socket that
+ * never opens or fails, or one that drops later, leaves no retry scheduled. */
+var WAKE_TICK_MS = 5000, WAKE_GAP_MS = 15000, CONNECT_STALL_MS = 30000, lastWakeTick = Date.now();
 setInterval(function () {
   var now = Date.now();
   if (util.resumedFromSuspend(lastWakeTick, now, WAKE_GAP_MS) && state.server) {
     dbg('resumed after ' + (now - lastWakeTick) + 'ms: reconnecting');
+    connect();
+  } else if (state.server && util.connectStalled(!!(player && player.isConnected), !!reconnectTimer, connectStartedAt, now, CONNECT_STALL_MS)) {
+    dbg('no connection ' + (now - connectStartedAt) + 'ms after connect: reconnecting');
     connect();
   }
   lastWakeTick = now;
