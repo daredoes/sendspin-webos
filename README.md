@@ -34,11 +34,15 @@ isn't in the foreground**.
 * **Keep TV awake.** Optional checkbox (in the app *and* the LAN page) that vetoes the
   webOS screensaver so an audio-only session doesn't blank the panel.
 * **Config that survives reinstall & reboot.** Server, credentials, player name,
-  default volume, and keep-awake are persisted on the TV's internal partition and
+  default volume, keep-awake, and the volume mode are persisted on the TV's internal partition and
   restored on startup — the service reconnects on its own.
-* **Stream-only volume + default volume.** Volume changes affect only this player's
-  stream (they don't skip/disturb the track), with a configurable default applied to a
-  fresh player.
+* **Separate or TV volume.** By default Music Assistant volume affects only this
+  player's stream (on a square curve, without skipping the track), separate from the
+  TV remote, with a configurable default applied to a fresh player. Turn on **Use TV
+  volume** (in the app, on the LAN page via `POST /api/tvvolume`, or over Luna with
+  `setTvVolume {"tvVolume":true}`) and Music Assistant volume and mute set the TV's
+  own volume instead, the stream plays at full level, and remote changes show up in
+  Music Assistant.
 
 ---
 
