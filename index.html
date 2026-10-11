@@ -230,6 +230,13 @@
                     <span>While music plays, open the projectM visualizer instead of the TV screensaver</span>
                 </span>
             </div>
+            <div class="srv-item toggle-item" id="tvvol-toggle" tabindex="0" onclick="toggleTvVolume()">
+                <span class="toggle-box" id="tvvol-box">☐</span>
+                <span class="toggle-label">
+                    <b>Use TV volume</b>
+                    <span>Music Assistant volume sets the TV volume, and the remote changes it. Off: music has its own volume</span>
+                </span>
+            </div>
             <div class="srv-item toggle-item" id="boot-toggle" tabindex="0" onclick="toggleBootOnStart()">
                 <span class="toggle-box" id="boot-box">☐</span>
                 <span class="toggle-label">
@@ -334,6 +341,20 @@
             lunaCall('setVisualizerScreensaver', { visualizerScreensaver: on });
         };
 
+        var tvVolumeEnabled = false;
+        function renderTvVolume(on) {
+            tvVolumeEnabled = !!on;
+            var t = document.getElementById('tvvol-toggle');
+            var box = document.getElementById('tvvol-box');
+            if (t) { t.classList.toggle('on', tvVolumeEnabled); }
+            if (box) { box.textContent = tvVolumeEnabled ? '☑' : '☐'; }
+        }
+        window.toggleTvVolume = function () {
+            var on = !tvVolumeEnabled;
+            renderTvVolume(on);                        // optimistic; status will confirm
+            lunaCall('setTvVolume', { tvVolume: on });
+        };
+
         window.toggleKeepAwake = function () {
             var on = !keepAwakeEnabled;
             renderKeepAwake(on);                       // optimistic; status will confirm
@@ -426,6 +447,7 @@
             document.getElementById('input-vol').value = c.vol;
             renderKeepAwake(lastStatus && lastStatus.keepAwake);
             renderVisualizerScreensaver(lastStatus && lastStatus.visualizerScreensaver);
+            renderTvVolume(lastStatus && lastStatus.tvVolume);
             var configured = hasCfg() || !!(lastStatus && lastStatus.server);
             document.getElementById('cancel-btn').style.display = configured ? 'block' : 'none';
             setupStatus.textContent = '';
@@ -585,6 +607,7 @@
             lastStatus = st;
             if (st.keepAwake != null) { renderKeepAwake(st.keepAwake); }
             if (st.visualizerScreensaver != null) { renderVisualizerScreensaver(st.visualizerScreensaver); }
+            if (st.tvVolume != null) { renderTvVolume(st.tvVolume); }
             if (st.bootOnStart != null) { renderBootOnStart(st.bootOnStart); }
             if (st.configUrl) {
                 var lu = document.getElementById('lan-url');

@@ -15,6 +15,7 @@
  *   applyConfig:function({server, username, password, playerName}) -> state object,
  *   setKeepAwake:function(bool) -> bool,
  *   setBootOnStart:function(bool) -> bool,
+ *   setTvVolume:function(bool) -> bool,
  *   getPin:function() -> string|null   (writes require this PIN when set)
  * }
  * Returns the http.Server (or null if it could not bind).
@@ -89,6 +90,14 @@ function start(port, handlers) {
       });
       return;
     }
+    if (req.method === 'POST' && url === '/api/tvvolume') {
+      readBody(req, function (body) {
+        if (!pinOk(handlers, req, body)) { send(res, 403, { error: 'wrong PIN' }); return; }
+        var on = handlers.setTvVolume(!!(body && body.tvVolume));
+        send(res, 200, { tvVolume: on });
+      });
+      return;
+    }
     // Toggle start-on-boot.
     if (req.method === 'POST' && url === '/api/bootonstart') {
       readBody(req, function (body) {
@@ -152,6 +161,8 @@ var PAGE = '<!DOCTYPE html>\n' +
 '<label>Default volume (0&ndash;100)</label><input id="vol" inputmode="numeric" placeholder="30">' +
 '<label class="check"><input type="checkbox" id="keepAwake">' +
 '<span class="t">Keep TV awake<small>Block the screensaver so the TV stays on while this player runs. Applies immediately.</small></span></label>' +
+'<label class="check"><input type="checkbox" id="tvVolume">' +
+'<span class="t">Use TV volume<small>Music Assistant volume sets the TV volume, and the TV remote changes it. Off: music has its own volume. Applies immediately.</small></span></label>' +
 '<label class="check"><input type="checkbox" id="bootOnStart">' +
 '<span class="t">Start on boot<small>Keep the player running after the TV restarts (best-effort; verify on your TV).</small></span></label>' +
 '<button class="primary" id="saveBtn" type="button">Save &amp; Connect</button>' +
@@ -165,11 +176,16 @@ var PAGE = '<!DOCTYPE html>\n' +
 'if(s.playerName&&!$("name").value)$("name").value=s.playerName;' +
 'if(s.defaultVolume!=null&&$("vol").value==="")$("vol").value=s.defaultVolume;' +
 'if(s.keepAwake!=null&&document.activeElement!==$("keepAwake"))$("keepAwake").checked=!!s.keepAwake;' +
+'if(s.tvVolume!=null&&document.activeElement!==$("tvVolume"))$("tvVolume").checked=!!s.tvVolume;' +
 'if(s.bootOnStart!=null&&document.activeElement!==$("bootOnStart"))$("bootOnStart").checked=!!s.bootOnStart}).catch(function(){})}' +
 '$("keepAwake").onchange=function(){fetch("/api/keepawake",{method:"POST",headers:{"Content-Type":"application/json"},' +
 'body:JSON.stringify({keepAwake:$("keepAwake").checked,pin:pin()})}).then(function(r){return r.json()}).then(function(d){' +
 'if(d.error){setMsg("Error: "+d.error,"err");$("keepAwake").checked=!$("keepAwake").checked;return}' +
 'setMsg(d.keepAwake?"Keep-awake on — screensaver blocked.":"Keep-awake off.","ok")}).catch(function(e){setMsg("Failed: "+e,"err")})};' +
+'$("tvVolume").onchange=function(){fetch("/api/tvvolume",{method:"POST",headers:{"Content-Type":"application/json"},' +
+'body:JSON.stringify({tvVolume:$("tvVolume").checked,pin:pin()})}).then(function(r){return r.json()}).then(function(d){' +
+'if(d.error){setMsg("Error: "+d.error,"err");$("tvVolume").checked=!$("tvVolume").checked;return}' +
+'setMsg(d.tvVolume?"Using the TV volume.":"Music has its own volume.","ok")}).catch(function(e){setMsg("Failed: "+e,"err")})};' +
 '$("bootOnStart").onchange=function(){fetch("/api/bootonstart",{method:"POST",headers:{"Content-Type":"application/json"},' +
 'body:JSON.stringify({bootOnStart:$("bootOnStart").checked,pin:pin()})}).then(function(r){return r.json()}).then(function(d){' +
 'if(d.error){setMsg("Error: "+d.error,"err");$("bootOnStart").checked=!$("bootOnStart").checked;return}' +

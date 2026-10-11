@@ -41,6 +41,7 @@ test('config-http routes, PIN gating, and handler wiring', async () => {
     applyConfig: (p) => { calls.config = p; return { ok: true, server: p.server }; },
     setKeepAwake: (v) => { calls.keep = v; return v; },
     setBootOnStart: (v) => { calls.boot = v; return v; },
+    setTvVolume: (v) => { calls.tvVol = v; return v; },
     getPin: () => '1234'
   });
   const port = server.address().port;
@@ -71,6 +72,10 @@ test('config-http routes, PIN gating, and handler wiring', async () => {
   const okHdr = await request(port, 'POST', '/api/bootonstart', { bootOnStart: true }, { 'x-sendspin-pin': '1234' });
   assert.strictEqual(okHdr.status, 200);
   assert.strictEqual(calls.boot, true);
+
+  const tvVol = await request(port, 'POST', '/api/tvvolume', { tvVolume: true, pin: '1234' });
+  assert.strictEqual(tvVol.status, 200);
+  assert.strictEqual(calls.tvVol, true);
 
   // /api/config still requires a server even with a valid PIN.
   const noServer = await request(port, 'POST', '/api/config', { pin: '1234' });

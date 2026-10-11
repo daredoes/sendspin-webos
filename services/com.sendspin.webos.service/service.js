@@ -74,6 +74,7 @@ var state = {
   defaultVolume: 30,       // 0..100 volume applied to a fresh player (until MA sets one)
   keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
   visualizerScreensaver: false, // when true, open the projectM visualizer instead of the screensaver while playing
+  tvVolume: false,         // when true, MA volume drives the TV volume and the stream plays at full level
   configPin: null,         // 4-digit PIN required to change config from the LAN page
   retrying: false,         // true while a reconnect is scheduled after a failure
   nextRetryMs: null,       // backoff delay of the pending reconnect, if any
@@ -166,6 +167,59 @@ function setVisualizerScreensaver(on) {
   return state.visualizerScreensaver;
 }
 
+/* ---------------------------------------------------------- TV volume mode */
+/* Off: MA volume scales only our stream, so music and the TV remote have separate
+ * volumes. On: MA volume/mute set the TV's master volume, the stream plays at full
+ * level, and TV remote changes are reported back to MA. */
+var TV_VOL = 'luna://com.webos.service.audio/master/';
+var tvVol = { volume: null, muted: false };
+
+function startTvVolumeWatch() {
+  try {
+    var sub = service.subscribe(TV_VOL + 'getVolume', { subscribe: true });
+    sub.on('response', function (m) {
+      var v = (m && m.payload && m.payload.volumeStatus) || {};
+      if (typeof v.volume !== 'number') { return; }
+      var changed = v.volume !== tvVol.volume || !!v.muteStatus !== tvVol.muted;
+      tvVol.volume = v.volume;
+      tvVol.muted = !!v.muteStatus;
+      if (changed && state.tvVolume && player && player.isConnected) {
+        try { player.protocolHandler.sendStateUpdate(); } catch (e) {}
+      }
+    });
+  } catch (e) { dbg('tv volume watch failed ' + e); }
+}
+
+function setTvVolumeLevel(volume, muted) {
+  service.call(TV_VOL + 'setVolume', { volume: clampVol(volume) }, function () {});
+  service.call(TV_VOL + 'muteVolume', { mute: !!muted }, function () {});
+}
+
+function externalVolume() {
+  var sm = player && player.stateManager;
+  return tvVol.volume === null
+    ? { volume: sm ? sm.volume : 100, muted: sm ? sm.muted : false }
+    : { volume: tvVol.volume, muted: tvVol.muted };
+}
+
+// Applies the mode to a live player without reconnecting.
+function applyTvVolumeMode() {
+  if (!player) { return; }
+  try {
+    player.protocolHandler.useHardwareVolume = state.tvVolume;
+    player.audioProcessor.updateVolume();
+    if (player.isConnected) { player.protocolHandler.sendStateUpdate(); }
+  } catch (e) { dbg('applyTvVolumeMode failed ' + e); }
+}
+
+function setTvVolume(on) {
+  state.tvVolume = !!on;
+  savePersist();
+  applyTvVolumeMode();
+  pushStatus();
+  return state.tvVolume;
+}
+
 function setKeepAwake(on) {
   state.keepAwake = !!on;
   savePersist();
@@ -229,6 +283,7 @@ function snapshot() {
     defaultVolume: state.defaultVolume,
     keepAwake: state.keepAwake,
     visualizerScreensaver: state.visualizerScreensaver,
+    tvVolume: state.tvVolume,
     configPin: state.configPin,      // shown on the TV; required by the LAN page
     retrying: state.retrying,
     nextRetryMs: state.nextRetryMs,
@@ -261,13 +316,20 @@ function setStatus(s, err) {
  * its lifecycle events drive the service status. */
 
 function makeSink(format) {
-  return new GstSink(format, function (name, detail) {
+  var sink = new GstSink(format, function (name, detail) {
     if (name === 'error') { setStatus('error', 'gst: ' + detail); }
     else if (name === 'exit') { if (state.status === 'playing') { setStatus('buffering'); } }
     else if (name === 'write') {
       if (state.status === 'buffering' || state.status === 'connecting') { setStatus('playing'); }
     }
   });
+  // In TV volume mode the TV applies volume/mute, so the stream stays at full level.
+  var setStreamVolume = sink.setVolume;
+  sink.setVolume = function (volumePct, muted) {
+    if (state.tvVolume) { setStreamVolume.call(sink, 100, false); }
+    else { setStreamVolume.call(sink, volumePct, muted); }
+  };
+  return sink;
 }
 
 /* ---------------------------------------------------- Music Assistant player */
@@ -348,6 +410,9 @@ function startPlayer(baseUrl, authToken, gen) {
     codecs: ['flac', 'pcm'],            // on-device gstreamer decoders (no Opus)
     storage: null,
     createSink: makeSink,
+    useHardwareVolume: state.tvVolume,
+    onVolumeCommand: setTvVolumeLevel,
+    getExternalVolume: externalVolume,
     onStateChange: function (s) { if (thisPlayer === player) { onCoreState(s); } }
   });
   player = thisPlayer;
@@ -406,6 +471,7 @@ function savePersist() {
     defaultVolume: state.defaultVolume,
     keepAwake: state.keepAwake,
     visualizerScreensaver: state.visualizerScreensaver,
+    tvVolume: state.tvVolume,
     configPin: state.configPin
   });
 }
@@ -420,6 +486,7 @@ function applyConfig(p) {
   }
   if (p.keepAwake !== undefined) { setKeepAwake(p.keepAwake); }
   if (p.visualizerScreensaver !== undefined) { setVisualizerScreensaver(p.visualizerScreensaver); }
+  if (p.tvVolume !== undefined) { setTvVolume(p.tvVolume); }
   if (p.bootOnStart !== undefined) { setBootOnStart(p.bootOnStart); }
   state.server = p.server || null;
   if (p.username !== undefined) { state.username = p.username || null; }
@@ -480,6 +547,11 @@ reg('setVisualizerScreensaver', function (msg) {
   msg.respond({ returnValue: true, visualizerScreensaver: on, state: snapshot() });
 });
 
+reg('setTvVolume', function (msg) {
+  var on = setTvVolume(!!(msg.payload && msg.payload.tvVolume));
+  msg.respond({ returnValue: true, tvVolume: on, state: snapshot() });
+});
+
 reg('setBootOnStart', function (msg) {
   var on = setBootOnStart(!!(msg.payload && msg.payload.bootOnStart));
   msg.respond({ returnValue: true, bootOnStart: on, state: snapshot() });
@@ -537,10 +609,12 @@ configHttp.start(CONFIG_HTTP_PORT, {
   applyConfig: applyConfig,
   setKeepAwake: setKeepAwake,
   setBootOnStart: setBootOnStart,
+  setTvVolume: setTvVolume,
   getPin: function () { return state.configPin; }
 });
 startKeepAlive();
 startScreenSaverGuard();
+startTvVolumeWatch();
 
 /* Standby suspends the TV: this process freezes and the network drops, but the socket
  * to Music Assistant still looks open until TCP gives up, over a minute after resume.
@@ -568,6 +642,7 @@ setInterval(function () {
     // winampScreensaver is the name this setting had in v1.2.0.
     var vis = typeof saved.visualizerScreensaver === 'boolean' ? saved.visualizerScreensaver : saved.winampScreensaver;
     if (typeof vis === 'boolean') { state.visualizerScreensaver = vis; }
+    if (typeof saved.tvVolume === 'boolean') { state.tvVolume = saved.tvVolume; }
     if (saved.configPin) { state.configPin = String(saved.configPin); }
     state.server = saved.server || null;
     state.username = saved.username || null;

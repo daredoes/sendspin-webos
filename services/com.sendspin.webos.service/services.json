@@ -18,6 +18,7 @@
         "setBootOnStart": "public",
         "setKeepAwake": "public",
         "setVisualizerScreensaver": "public",
+        "setTvVolume": "public",
         "showVisualizer": "public",
         "status": "public"
       }
