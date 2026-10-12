@@ -1,4 +1,4 @@
-# Sendspin Cinema Player for LG webOS 🎬🎵
+# Sendspin WebOS: Music Assistant player for LG webOS 🎬🎵
 
 A cinema-inspired **Music Assistant** player for LG webOS TVs. The on-screen UI is
 beautiful and minimal — glowing progress bar, album-art-driven accent colors — but
@@ -7,7 +7,7 @@ holds the Music Assistant connection and plays audio that **mixes with whatever 
 already on screen** (live TV / HDMI), and **keeps playing/connected even when the app
 isn't in the foreground**.
 
-> This is a heavily extended fork of the original **Sendspin Cinema** web app. The
+> This is a heavily extended fork of the original [Sendspin Cinema](https://github.com/zonya/sendspin-cinema-webos) web app. The
 > original was a single `index.html` that talked to Music Assistant directly from the
 > browser. This version re-architects it into a resident daemon + thin UI (see below)
 > and adds LAN setup, on-device audio decoding, persistence, full-remote navigation,
@@ -100,7 +100,7 @@ Each GitHub release publishes a Homebrew Channel repository index next to the IP
 
 1. In Homebrew Channel, open **Settings** and add this extra repository:
    `https://github.com/daredoes/sendspin-webos/releases/latest/download/apps.json`
-2. Find **Sendspin Cinema** in the app list and install it. Updates arrive the same way
+2. Find **Sendspin WebOS** in the app list and install it. Updates arrive the same way
    when a new release is published.
 
 ### Visualizer screensaver

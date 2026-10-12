@@ -1,6 +1,6 @@
 {
   "id": "com.sendspin.webos.service",
-  "description": "Sendspin Cinema background audio daemon",
+  "description": "Sendspin WebOS background audio daemon",
   "services": [
     {
       "name": "com.sendspin.webos.service",

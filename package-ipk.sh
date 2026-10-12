@@ -1,5 +1,5 @@
 #!/bin/sh
-# package-ipk.sh — build a single webOS IPK containing the Sendspin Cinema app
+# package-ipk.sh — build a single webOS IPK containing the Sendspin WebOS app
 # AND the background audio daemon service (com.sendspin.webos.service).
 #
 # Stages clean app/ and service/ trees (so dev/build/test files, docs, native/,

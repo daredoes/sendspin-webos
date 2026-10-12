@@ -4,7 +4,7 @@
     "vendor": "Open Source",
     "type": "web",
     "main": "index.html",
-    "title": "Sendspin Cinema",
+    "title": "Sendspin WebOS",
     "icon": "icon.png",
     "permissions": [
         "audioCapture",

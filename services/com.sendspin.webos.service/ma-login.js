@@ -32,7 +32,7 @@ function getToken(hostPort, username, password, cb) {
       api.send(JSON.stringify({
         command: 'auth/login',
         message_id: 'sendspin-login',
-        args: { username: username, password: password, device_name: 'Sendspin Cinema (webOS)' }
+        args: { username: username, password: password, device_name: 'Sendspin WebOS' }
       }));
       return;
     }

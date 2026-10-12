@@ -1,9 +1,9 @@
 ---
 name: deploy-tv
-description: Build and install the Sendspin Cinema webOS IPK onto an LG TV in dev mode over SSH. Use when asked to deploy, install, push, or flash the app/service to a TV (e.g. "install on root@192.168.1.32"), or to rebuild the IPK and load it on hardware.
+description: Build and install the Sendspin WebOS webOS IPK onto an LG TV in dev mode over SSH. Use when asked to deploy, install, push, or flash the app/service to a TV (e.g. "install on root@192.168.1.32"), or to rebuild the IPK and load it on hardware.
 ---
 
-# Deploy Sendspin Cinema to a webOS TV
+# Deploy Sendspin WebOS to a webOS TV
 
 One command does everything (build → copy → install → verify):
 

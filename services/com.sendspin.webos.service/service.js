@@ -69,7 +69,7 @@ var state = {
   server: null,            // Music Assistant host (ip or host[:port])
   username: null,          // MA login (required when the server has auth enabled)
   password: null,
-  playerName: 'Sendspin Cinema',
+  playerName: 'Sendspin WebOS',
   bootOnStart: true,
   defaultVolume: 30,       // 0..100 volume applied to a fresh player (until MA sets one)
   keepAwake: false,        // when true, veto the TV screensaver so the panel stays on
@@ -664,4 +664,4 @@ setInterval(function () {
   if (state.server) { connect(); }
 })();
 
-console.log('Sendspin Cinema service ready:', SERVICE_ID);
+console.log('Sendspin WebOS service ready:', SERVICE_ID);

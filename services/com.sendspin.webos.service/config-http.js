@@ -130,7 +130,7 @@ function start(port, handlers) {
 var PAGE = '<!DOCTYPE html>\n' +
 '<html lang="en"><head><meta charset="utf-8">' +
 '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-'<title>Sendspin Cinema setup</title><style>' +
+'<title>Sendspin WebOS setup</title><style>' +
 '*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0d12;color:#eef;display:flex;justify-content:center}' +
 '.wrap{width:100%;max-width:560px;padding:28px 20px 60px}h1{font-size:1.5rem;margin:0 0 4px}' +
 '.sub{color:#8b93a7;margin:0 0 22px;font-size:.95rem}label{display:block;font-size:.82rem;text-transform:uppercase;letter-spacing:.06em;color:#8b93a7;margin:16px 0 6px}' +
@@ -147,7 +147,7 @@ var PAGE = '<!DOCTYPE html>\n' +
 '.check input{width:22px;height:22px;flex:0 0 auto;margin-top:2px;accent-color:#3b82f6}' +
 '.check .t{font-size:.95rem}.check .t small{display:block;color:#8b93a7;margin-top:3px;font-size:.82rem;text-transform:none;letter-spacing:0}' +
 '</style></head><body><div class="wrap">' +
-'<h1>Sendspin Cinema</h1><p class="sub">Configure this TV player from your computer.</p>' +
+'<h1>Sendspin WebOS</h1><p class="sub">Configure this TV player from your computer.</p>' +
 '<div class="pill" id="conn">…</div>' +
 '<label>PIN (shown on the TV screen)</label><input id="pin" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off">' +
 '<button class="scan" id="scanBtn" type="button">Scan for Music Assistant servers</button>' +

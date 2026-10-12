@@ -1,5 +1,5 @@
 #!/bin/sh
-# deploy-tv.sh — build + install the Sendspin Cinema IPK onto a webOS TV over SSH.
+# deploy-tv.sh — build + install the Sendspin WebOS IPK onto a webOS TV over SSH.
 #
 # WHY THIS EXISTS
 #   `ares-install -d <device>` needs the LG dev-mode SSH *key*, which often isn't

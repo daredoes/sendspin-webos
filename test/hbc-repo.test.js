@@ -10,7 +10,7 @@ const build = require('../scripts/hbc-repo');
 test('builds a Homebrew Channel manifest and repo index for a release', () => {
   const ipk = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hbc-')), 'com.sendspin.webos_1.2.3_all.ipk');
   fs.writeFileSync(ipk, 'ipk-bytes');
-  const appinfo = { id: 'com.sendspin.webos', version: '1.2.3', type: 'web', title: 'Sendspin Cinema' };
+  const appinfo = { id: 'com.sendspin.webos', version: '1.2.3', type: 'web', title: 'Sendspin WebOS' };
   const { manifest, apps } = build('v1.2.3', ipk, appinfo);
 
   const base = 'https://github.com/daredoes/sendspin-webos/releases/download/v1.2.3/';
