@@ -167,10 +167,14 @@ If the dev SSH key isn't loaded (a common `ares-install` failure), use the bundl
 script, which builds, copies, and installs over plain root SSH and streams the install
 status:
 ```bash
-scripts/deploy-tv.sh <TV_IP> <ROOT_PASSWORD>     # e.g. 192.168.1.32 alpine
+scripts/deploy-tv.sh <TV_IP>                     # key auth: uses ~/.ssh/lgtv (or TV_KEY=path)
+scripts/deploy-tv.sh <TV_IP> <ROOT_PASSWORD>     # password auth when there is no key file
 SKIP_BUILD=1 scripts/deploy-tv.sh <TV_IP>        # reuse the existing dist/*.ipk
 ```
-(Requires `sshpass`. See `.claude/skills/deploy-tv/SKILL.md` for the why/gotchas.)
+Key auth is the standard. A rooted TV with `/home/root/.ssh/authorized_keys` no longer gets
+the placeholder `alpine` password at boot, so the password only works on TVs with no
+authorized keys. The password path needs `sshpass`. See `.claude/skills/deploy-tv/SKILL.md`
+for the why/gotchas.
 
 ---
 

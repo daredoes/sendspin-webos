@@ -11,19 +11,25 @@
 # Usage:
 #   scripts/uninstall-tv.sh [HOST] [PASSWORD] [APP_ID]
 #   TV_HOST=192.168.1.32 TV_PASS=alpine scripts/uninstall-tv.sh
+#   TV_KEY=~/.ssh/lgtv scripts/uninstall-tv.sh   # key auth (default when ~/.ssh/lgtv exists)
 #
 set -e
 HOST="${1:-${TV_HOST:-192.168.1.32}}"
 PASS="${2:-${TV_PASS:-alpine}}"
 APP_ID="${3:-${APP_ID:-com.sendspin.cinema}}"
+KEY="${TV_KEY:-$HOME/.ssh/lgtv}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
-command -v sshpass >/dev/null || { echo "[uninstall] need sshpass (brew install sshpass)"; exit 1; }
+if [ -f "$KEY" ]; then
+  tv_tty() { ssh -tt $SSH_OPTS -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes "root@$HOST" "$@"; }
+else
+  command -v sshpass >/dev/null || { echo "[uninstall] no key at $KEY and no sshpass (brew install sshpass)"; exit 1; }
+  tv_tty() { sshpass -p "$PASS" ssh -tt $SSH_OPTS "root@$HOST" "$@"; }
+fi
 
 echo "[uninstall] removing $APP_ID from $HOST"
 REMOVE_CMD="if timeout 1 true 2>/dev/null; then TO='timeout 60'; else TO='timeout -t 60'; fi; \
 \$TO luna-send -i -f luna://com.webos.appInstallService/dev/remove '{\"id\":\"$APP_ID\",\"subscribe\":true}'"
-OUT="$(sshpass -p "$PASS" ssh -tt $SSH_OPTS "root@$HOST" "$REMOVE_CMD" 2>&1 | tr -d '\r')"
+OUT="$(tv_tty "$REMOVE_CMD" 2>&1 | tr -d '\r')"
 echo "$OUT" | grep -o '"state": "[^"]*"\|"statusValue": [0-9]*' | awk '!seen[$0]++ { print "   • " $0 }'
 
 if echo "$OUT" | grep -qi 'removed\|"returnValue": *false.*not.*exist\|FAILED_REMOVE'; then

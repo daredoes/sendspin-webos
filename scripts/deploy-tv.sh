@@ -22,6 +22,13 @@
 # USAGE
 #   scripts/deploy-tv.sh [HOST] [PASSWORD]
 #   TV_HOST=192.168.1.32 TV_PASS=alpine scripts/deploy-tv.sh
+#   TV_KEY=~/.ssh/lgtv scripts/deploy-tv.sh   # key auth (the default when ~/.ssh/lgtv exists)
+#
+# AUTH
+#   Key auth is the standard. Once a TV has /home/root/.ssh/authorized_keys, Homebrew
+#   Channel's startup.sh stops setting the placeholder 'alpine' password at boot, so
+#   the password no longer works there. With no key file the script falls back to
+#   the password (TVs with no authorized_keys file).
 #   SKIP_BUILD=1 scripts/deploy-tv.sh        # reuse the existing dist/*.ipk
 #
 set -e
@@ -33,12 +40,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPDIR="/media/developer/apps/usr/palm/applications/$APP_ID"
 REMOTE_IPK="/media/developer/${APP_ID}.deploy.ipk"
 
+KEY="${TV_KEY:-$HOME/.ssh/lgtv}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-ssh_run()  { sshpass -p "$PASS" ssh  $SSH_OPTS "root@$HOST" "$@"; }
-ssh_tty()  { sshpass -p "$PASS" ssh -tt $SSH_OPTS "root@$HOST" "$@"; }
-ssh_scp()  { sshpass -p "$PASS" scp $SSH_OPTS "$1" "root@$HOST:$2"; }
-
-command -v sshpass >/dev/null || { echo "[deploy] need sshpass (brew install sshpass)"; exit 1; }
+if [ -f "$KEY" ]; then
+  SSH_OPTS="$SSH_OPTS -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes"
+  ssh_run()  { ssh  $SSH_OPTS "root@$HOST" "$@"; }
+  ssh_tty()  { ssh -tt $SSH_OPTS "root@$HOST" "$@"; }
+  ssh_scp()  { scp $SSH_OPTS "$1" "root@$HOST:$2"; }
+else
+  command -v sshpass >/dev/null || { echo "[deploy] no key at $KEY and no sshpass (brew install sshpass)"; exit 1; }
+  ssh_run()  { sshpass -p "$PASS" ssh  $SSH_OPTS "root@$HOST" "$@"; }
+  ssh_tty()  { sshpass -p "$PASS" ssh -tt $SSH_OPTS "root@$HOST" "$@"; }
+  ssh_scp()  { sshpass -p "$PASS" scp $SSH_OPTS "$1" "root@$HOST:$2"; }
+fi
 
 # 1. Build (unless told to reuse the existing artifact).
 if [ "$SKIP_BUILD" != "1" ]; then
