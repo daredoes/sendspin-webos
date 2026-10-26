@@ -308,7 +308,39 @@ function setStatus(s, err) {
   state.status = s;
   state.error = err || null;
   if (err) { console.error('Sendspin service:', err); }
+  holdNoSignalOff(s === 'playing' || s === 'buffering');
   pushStatus();
+}
+
+/* "No signal power off" turns the TV off after 15 min on an input with no signal,
+ * which a blanked panel on an empty HDMI input looks like. Hold it off while music
+ * plays and put the user's value back after. */
+var SETTINGS = 'luna://com.webos.settingsservice/';
+var savedNoSignalAutoOff = null; // the user's value while held off; null when not held
+var holdingNoSignal = false;
+
+function holdNoSignalOff(hold) {
+  if (hold === holdingNoSignal) { return; }
+  holdingNoSignal = hold;
+  if (hold) {
+    service.call(SETTINGS + 'getSystemSettings', { category: 'time', keys: ['noSignalAutoOff'] }, function (m) {
+      var v = m && m.payload && m.payload.settings && m.payload.settings.noSignalAutoOff;
+      dbg('noSignalAutoOff get ' + JSON.stringify(m && m.payload));
+      if (!holdingNoSignal || !v || v === 'off') { return; }
+      savedNoSignalAutoOff = v;
+      setNoSignalAutoOff('off');
+    });
+  } else if (savedNoSignalAutoOff) {
+    // ponytail: in-memory only; a service crash mid-play leaves it off until the next play ends
+    setNoSignalAutoOff(savedNoSignalAutoOff);
+    savedNoSignalAutoOff = null;
+  }
+}
+
+function setNoSignalAutoOff(v) {
+  service.call(SETTINGS + 'setSystemSettings', { category: 'time', settings: { noSignalAutoOff: v } }, function (m) {
+    dbg('noSignalAutoOff set ' + v + ' ' + JSON.stringify(m && m.payload));
+  });
 }
 
 /* ----------------------------------------------------------------- sink */
@@ -349,6 +381,7 @@ function onCoreState(s) {
   }
   if (s.groupState && s.groupState.playback_state) {
     state.status = (s.groupState.playback_state === 'playing') ? 'playing' : 'paused';
+    holdNoSignalOff(state.status === 'playing');
   }
   // A live connection means any pending reconnect backoff can be reset.
   if (player && player.isConnected) { clearReconnect(); }
