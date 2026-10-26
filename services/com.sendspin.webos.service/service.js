@@ -29,6 +29,7 @@ var persist = require('./persist');
 var util = require('./util');
 var os = require('os');
 var path = require('path');
+var childProcess = require('child_process');
 
 var SERVICE_ID = 'com.sendspin.webos.service';
 var service = new Service(SERVICE_ID);
@@ -314,18 +315,27 @@ function setStatus(s, err) {
 
 /* "No signal power off" turns the TV off after 15 min on an input with no signal,
  * which a blanked panel on an empty HDMI input looks like. Hold it off while music
- * plays and put the user's value back after. */
+ * plays and put the user's value back after. settingsservice denies this service's own
+ * Luna handle even when elevated, so the calls go through a root luna-send instead. */
 var SETTINGS = 'luna://com.webos.settingsservice/';
 var savedNoSignalAutoOff = null; // the user's value while held off; null when not held
 var holdingNoSignal = false;
+
+function lunaSend(uri, params, cb) {
+  childProcess.execFile('luna-send', ['-n', '1', uri, JSON.stringify(params)], { timeout: 10000 }, function (err, out) {
+    var payload = null;
+    try { payload = JSON.parse(out); } catch (e) { payload = { returnValue: false, errorText: String(err || out) }; }
+    cb(payload);
+  });
+}
 
 function holdNoSignalOff(hold) {
   if (hold === holdingNoSignal) { return; }
   holdingNoSignal = hold;
   if (hold) {
-    service.call(SETTINGS + 'getSystemSettings', { category: 'time', keys: ['noSignalAutoOff'] }, function (m) {
-      var v = m && m.payload && m.payload.settings && m.payload.settings.noSignalAutoOff;
-      dbg('noSignalAutoOff get ' + JSON.stringify(m && m.payload));
+    lunaSend(SETTINGS + 'getSystemSettings', { category: 'time', keys: ['noSignalAutoOff'] }, function (p) {
+      var v = p.settings && p.settings.noSignalAutoOff;
+      dbg('noSignalAutoOff get ' + JSON.stringify(p));
       if (!holdingNoSignal || !v || v === 'off') { return; }
       savedNoSignalAutoOff = v;
       setNoSignalAutoOff('off');
@@ -338,8 +348,8 @@ function holdNoSignalOff(hold) {
 }
 
 function setNoSignalAutoOff(v) {
-  service.call(SETTINGS + 'setSystemSettings', { category: 'time', settings: { noSignalAutoOff: v } }, function (m) {
-    dbg('noSignalAutoOff set ' + v + ' ' + JSON.stringify(m && m.payload));
+  lunaSend(SETTINGS + 'setSystemSettings', { category: 'time', settings: { noSignalAutoOff: v } }, function (p) {
+    dbg('noSignalAutoOff set ' + v + ' ' + JSON.stringify(p));
   });
 }
 
