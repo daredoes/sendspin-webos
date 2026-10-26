@@ -85,6 +85,9 @@ ssh_run "rm -f '$REMOTE_IPK'" >/dev/null 2>&1 || true
 if echo "$OUT" | grep -q '"state": "installed"'; then
   SIZE="$(ssh_run "ls -l '$APPDIR/index.html' 2>/dev/null | awk '{print \$5}'" | tr -d '\r')"
   echo "[deploy] ✅ installed — index.html now ${SIZE:-?} bytes on TV"
+  # A reinstall drops the service's elevation, which it needs to change system settings.
+  ELEVATE=/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service
+  ssh_run "[ -x $ELEVATE ] && $ELEVATE com.sendspin.webos.service >/dev/null 2>&1 && echo '[deploy] service elevated'" | tr -d '\r' || true
   echo "[deploy] relaunch the app on the TV to load the new build."
 else
   echo "[deploy] ❌ did not reach state \"installed\" — full stream:"
